@@ -1,0 +1,242 @@
+"""FastMCP server: five read-only Google Chat tools over stdio. `gchat-mcp login` authorises."""
+import sys
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
+
+from mcp.server.fastmcp import FastMCP
+
+from . import auth, chat, fmt
+
+mcp = FastMCP("gchat")
+MAX_SPACES, MAX_PER_SPACE, OUT_CAP = 60, 500, 40000
+
+
+def _sid(x: str) -> str:
+    return x if x.startswith("spaces/") else f"spaces/{x}"
+
+
+def _since(s: str, days: int) -> datetime:
+    """ISO-8601 date/datetime (naive = Asia/Kolkata); blank = `days` ago."""
+    if not s:
+        return datetime.now(timezone.utc) - timedelta(days=days)
+    d = datetime.fromisoformat(s)
+    return d if d.tzinfo else d.replace(tzinfo=fmt.IST)
+
+
+def _fan(fn, items):
+    """Run fn over items in a small pool; yield (item, result, error) in input order."""
+    with ThreadPoolExecutor(6) as ex:
+        futs = [ex.submit(fn, i) for i in items]
+        for i, f in zip(items, futs):
+            try:
+                yield i, f.result(), None
+            except Exception as e:  # reported by callers, never swallowed
+                yield i, None, e
+
+
+def _active(since: datetime, only: str = "") -> tuple[list[dict], list[str]]:
+    """Spaces active since `since` (or just `only`), capped at MAX_SPACES; plus notes."""
+    if only:
+        return [chat.get(_sid(only), "spaces.get")], []
+    sp, trunc = chat.spaces()
+    cut = fmt.rfc3339(since)
+    sp = [s for s in sp if s.get("lastActiveTime", cut) >= cut]
+    notes = [f"Only the {MAX_SPACES} most recently active of {len(sp)} spaces were checked."] if len(sp) > MAX_SPACES else []
+    return sp[:MAX_SPACES], notes + (["Space list was truncated at 3000."] if trunc else [])
+
+
+def _thread_blocks(msgs: list[dict], me: str) -> str:
+    """Chronological messages grouped by thread; singletons render flat."""
+    groups: dict[str, list[dict]] = {}
+    for m in msgs:
+        groups.setdefault(m.get("thread", {}).get("name", m["name"]), []).append(m)
+    out = []
+    for t, g in groups.items():
+        if len(g) > 1:
+            out.append(f"**Thread {t.split('/')[-1]}** ({len(g)} messages)")
+        out += [fmt.render_message(m, chat.who, me) for m in g]
+    return "\n".join(out)
+
+
+def _finish(parts: list[str], notes: list[str]) -> str:
+    text = "\n\n".join(parts)
+    if len(text) > OUT_CAP:
+        text = text[:OUT_CAP] + "\n…(output truncated)"
+    return text + ("\n\nNotes:\n" + "\n".join("- " + n for n in notes) if notes else "")
+
+
+def _errors(res, what: str) -> list[str]:
+    return [f"{what} {s.get('name')}: {e}" for s, _, e in res if e]
+
+
+@mcp.tool()
+def find_conversations(query: str = "", participant_email: str = "", limit: int = 20) -> str:
+    """List Google Chat conversations (spaces, group chats, DMs), most recently active first.
+
+    query: case-insensitive substring of the space name, or of the other members' names for DMs/group chats.
+    participant_email: return only the 1:1 DM with this person (exact lookup).
+    Each line gives the conversation id (pass it to read_conversation), label, type and last activity.
+    """
+    chat.me_id()
+    if participant_email:
+        try:
+            sp = [chat.get("spaces:findDirectMessage", "spaces.findDirectMessage",
+                           {"name": f"users/{participant_email}"})]
+        except chat.ApiError as e:
+            if e.status == 404:
+                return f"No direct message with {participant_email}."
+            raise
+        trunc = False
+    else:
+        sp, trunc = chat.spaces()
+    notes = ["Space list truncated at 3000."] if trunc else []
+    q = query.lower()
+    if q:
+        unnamed = [s for s in sp if not s.get("displayName")][:MAX_SPACES]
+        list(_fan(chat.label, unnamed))  # warm label cache
+        if len([s for s in sp if not s.get("displayName")]) > MAX_SPACES:
+            notes.append(f"Only the {MAX_SPACES} most recent unnamed DMs/group chats were name-checked.")
+        sp = [s for s in sp if (s.get("displayName") or s in unnamed) and q in chat.label(s).lower()]
+    sp = sp[:limit]
+    list(_fan(chat.label, sp))
+    if not sp:
+        return "No conversations found."
+    kinds = {"SPACE": "space", "GROUP_CHAT": "group chat", "DIRECT_MESSAGE": "DM"}
+    lines = [f"- `{s['name']}` | {chat.label(s)} | {kinds.get(s.get('spaceType'), s.get('spaceType', '?'))}"
+             f" | last active {fmt.fmt_time(s['lastActiveTime']) if s.get('lastActiveTime') else 'unknown'}"
+             for s in sp]
+    return _finish(lines, notes)
+
+
+@mcp.tool()
+def read_conversation(conversation_id: str, thread_id: str = "", since: str = "", limit: int = 50) -> str:
+    """Read messages of one conversation in chronological order, grouped by thread.
+
+    conversation_id: `spaces/XXXX` (or bare id) from find_conversations / search_messages.
+    thread_id: only that thread (id or full `spaces/X/threads/Y`).
+    since: only messages after this ISO-8601 time (naive = Asia/Kolkata); blank = latest `limit` messages.
+    Shows the latest `limit` matching messages. Quoted replies, forwarded messages (with their full text and
+    source), attachments, Meet/Drive/rich links are expanded; times are Asia/Kolkata; my messages say "(me)".
+    """
+    me = chat.me_id()
+    space = _sid(conversation_id)
+    thread = ""
+    if thread_id:
+        thread = thread_id if thread_id.startswith("spaces/") else f"{space}/threads/{thread_id}"
+    msgs, more = chat.messages(space, fmt.rfc3339(_since(since, 0)) if since else "", thread, limit)
+    if not msgs:
+        return "No messages found."
+    s = chat.get(space, "spaces.get")
+    head = f"## {chat.label(s)} (`{space}`)"
+    notes = [f"Older messages exist beyond the latest {limit}; raise limit or use since."] if more else []
+    return _finish([head, _thread_blocks(msgs[::-1], me)], notes)
+
+
+@mcp.tool()
+def search_messages(keywords: list[str], since: str = "", conversation_id: str = "",
+                    sender_email: str = "", limit: int = 30) -> str:
+    """Find messages containing ALL keywords (case-insensitive) in text, forwarded text or attachment names.
+
+    The Chat API has no full-text search, so this scans recent messages client-side: spaces active since `since`
+    (ISO-8601, default 7 days ago; naive = Asia/Kolkata), at most 60 spaces x 500 messages each; the output says
+    when a bound was hit. conversation_id restricts to one space; sender_email to one sender.
+    Hits show conversation, thread id and message id for read_conversation follow-up. Newest first.
+    """
+    if not keywords:
+        raise ValueError("keywords must not be empty")
+    me = chat.me_id()
+    since_dt = _since(since, 7)
+    sp, notes = _active(since_dt, conversation_id)
+    res = list(_fan(lambda s: chat.messages(s["name"], fmt.rfc3339(since_dt), "", MAX_PER_SPACE), sp))
+    hits = []
+    for s, r, e in res:
+        if e:
+            continue
+        msgs, more = r
+        if more:
+            notes.append(f"{chat.label(s)}: only the newest {MAX_PER_SPACE} messages since {fmt.rfc3339(since_dt)} were scanned.")
+        hits += [(s, m) for m in msgs if fmt.matches(m, keywords)
+                 and (not sender_email or chat.person(m.get("sender", {}))["email"].lower() == sender_email.lower())]
+    notes += _errors(res, "could not read")
+    hits.sort(key=lambda h: h[1]["createTime"], reverse=True)
+    if not hits:
+        return _finish(["No matching messages."], notes)
+    out = [f"{len(hits)} match(es), showing {min(limit, len(hits))}"]
+    for s, m in hits[:limit]:
+        out.append(f"{chat.label(s)} | `{s['name']}` | thread `{m.get('thread', {}).get('name', '').split('/')[-1]}`"
+                   f" | message `{m['name'].split('/')[-1]}`\n" + fmt.render_message(m, chat.who, me))
+    return _finish(out, notes)
+
+
+@mcp.tool()
+def unread(since: str = "") -> str:
+    """List unread messages (newer than my read marker, not sent by me) in conversations active since `since`.
+
+    since: ISO-8601 (naive = Asia/Kolkata), default 3 days ago. Never looks back past `since`; scans at most
+    60 spaces x 500 messages. Grouped by conversation with counts, messages expanded like read_conversation.
+    """
+    me = chat.me_id()
+    since_dt = _since(since, 3)
+    sp, notes = _active(since_dt)
+
+    def one(s):
+        rs = chat.get(f"users/me/{s['name']}/spaceReadState", "users.spaces.getSpaceReadState")
+        cut = max(rs.get("lastReadTime", ""), fmt.rfc3339(since_dt))
+        msgs, more = chat.messages(s["name"], cut, "", MAX_PER_SPACE)
+        return [m for m in msgs[::-1] if fmt.uid(m.get("sender", {})) != me], more
+
+    res = list(_fan(one, sp))
+    out = []
+    for s, r, e in res:
+        if e or not r[0]:
+            continue
+        if r[1]:
+            notes.append(f"{chat.label(s)}: more than {MAX_PER_SPACE} unread; showing the newest.")
+        out.append(f"## {chat.label(s)} (`{s['name']}`): {len(r[0])} unread\n" + _thread_blocks(r[0], me))
+    notes += _errors(res, "could not read")
+    return _finish(out or ["Nothing unread."], notes)
+
+
+@mcp.tool()
+def needs_reply(since: str = "", min_age_minutes: int = 0) -> str:
+    """Find conversations waiting for MY reply, newest first, with the trigger message and 3 prior messages.
+
+    Reasons: (a) DM/group chat whose last message is from someone else; (b) in a named space, a message
+    @-mentioning me after my last message in that thread; (c) a thread I posted in whose last message is from
+    someone else. Bots are ignored. since: ISO-8601 (naive = Asia/Kolkata), default 3 days ago.
+    min_age_minutes: skip triggers newer than this. Scans at most 60 spaces x 500 messages.
+    """
+    me = chat.me_id()
+    since_dt = _since(since, 3)
+    sp, notes = _active(since_dt)
+    res = list(_fan(lambda s: chat.messages(s["name"], fmt.rfc3339(since_dt), "", MAX_PER_SPACE), sp))
+    newest_ok = datetime.now(timezone.utc) - timedelta(minutes=min_age_minutes)
+    found = []
+    for s, r, e in res:
+        if e:
+            continue
+        msgs, more = r
+        if more:
+            notes.append(f"{chat.label(s)}: only the newest {MAX_PER_SPACE} messages were scanned.")
+        for reason, ctx in fmt.reply_reasons(msgs[::-1], s.get("spaceType", ""), me):
+            if fmt.parse_ts(ctx[-1]["createTime"]) <= newest_ok:
+                found.append((s, reason, ctx))
+    notes += _errors(res, "could not read")
+    found.sort(key=lambda f: f[2][-1]["createTime"], reverse=True)
+    if not found:
+        return _finish(["Nothing needs a reply."], notes)
+    why = {"a": "last message is from them", "b": "you were @-mentioned", "c": "they answered a thread you posted in"}
+    out = [f"### {chat.label(s)} (`{s['name']}`) | ({r}) {why[r]}\n" + "\n".join(fmt.render_message(m, chat.who, me) for m in ctx)
+           for s, r, ctx in found]
+    return _finish(out, notes)
+
+
+def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "login":
+        auth.login()
+    else:
+        mcp.run()
+
+
+if __name__ == "__main__":
+    main()

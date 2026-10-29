@@ -1,0 +1,14 @@
+# gchat-mcp
+
+Read-only local stdio MCP server for Google Chat, using the GA Chat REST API under your own Google OAuth (no service account).
+Tools: `find_conversations`, `read_conversation`, `search_messages`, `unread`, `needs_reply`.
+
+## Setup
+1. Put your OAuth "Desktop app" client at `~/.config/gchat-mcp/client_secret.json`.
+2. `uv sync`
+3. `uv run gchat-mcp login` (opens a browser once; token saved to `~/.config/gchat-mcp/token.json`, mode 0600)
+4. Register (all aliases):
+   `env -u CLAUDE_CONFIG_DIR claude mcp add -s user gchat-local -- uv run --directory /Users/ajmalaksar/Documents/projects/gchat-mcp gchat-mcp`
+
+The server never opens a browser; without a valid token every tool says to run `gchat-mcp login`.
+Tests: `uv run pytest -q`.
