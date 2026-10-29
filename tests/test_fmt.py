@@ -33,10 +33,10 @@ def test_forward_expands_snapshot_and_source():
 def test_reply_quote_and_me_marker():
     m = msg("m2", ME, "on it", quotedMessageMetadata={
         "name": "spaces/AAA/messages/m1", "lastUpdateTime": "2026-10-29T08:00:00Z",
-        "quotedMessageSnapshot": {"sender": "users/222", "text": "can you check?"}})
+        "quotedMessageSnapshot": {"sender": "Riya Dhawan", "text": "can you check?"}})
     out = fmt.render_message(m, who, ME)
     assert "**Ajmal Aksar (me)**: on it" in out
-    assert "↩ replying to Priya: can you check?" in out
+    assert "↩ replying to Riya Dhawan: can you check?" in out
 
 
 def test_meet_and_rich_link_annotations():
@@ -90,3 +90,11 @@ def test_space_thread_i_posted_in_answered_by_other_is_c():
 
 def test_space_unrelated_thread_not_flagged():
     assert fmt.reply_reasons([msg("1", "222", "fyi"), msg("2", "333", "ack")], "SPACE", ME) == []
+
+
+def test_uploaded_attachment_omits_signed_url():
+    m = msg("m9", "222", "", attachment=[{"contentName": "log.txt", "contentType": "text/plain",
+                                           "downloadUri": "https://chat.google.com/api/get_attachment_url?attachment_token=X"}])
+    out = fmt.render_message(m, who, ME)
+    assert "attachment: log.txt (text/plain)" in out
+    assert "attachment_token" not in out

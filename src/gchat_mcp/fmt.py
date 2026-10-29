@@ -58,9 +58,9 @@ def _strings(o):
 def attachment_lines(atts: list[dict]) -> list[str]:
     out = []
     for a in atts:
-        link = a.get("downloadUri") or (
-            "https://drive.google.com/file/d/" + a["driveDataRef"]["driveFileId"] + "/view"
-            if a.get("driveDataRef", {}).get("driveFileId") else "")
+        # Uploaded files only have a long signed downloadUri that needs a browser session; skip it.
+        fid = a.get("driveDataRef", {}).get("driveFileId")
+        link = f"https://drive.google.com/file/d/{fid}/view" if fid else ""
         out.append(f"attachment: {a.get('contentName', 'unnamed')} ({a.get('contentType', 'unknown type')})"
                    + (f" {link}" if link else ""))
     return out
@@ -83,7 +83,9 @@ def render_message(m: dict, who, me_id: str, space_label: str = "") -> str:
     q = m.get("quotedMessageMetadata")
     if q:
         snap = q.get("quotedMessageSnapshot", {})
-        qname = who(snap["sender"]) if snap.get("sender") else "unknown"
+        # The snapshot sender is the author's display name, not a users/{id}.
+        qsender = snap.get("sender", "")
+        qname = who(qsender) if qsender.startswith("users/") else (qsender or "unknown")
         if q.get("quoteType") == "FORWARD":
             src = q.get("forwardedMetadata", {}).get("spaceDisplayName")
             subs.append(f"↪ forwarded from {qname}" + (f" in {src}" if src else "") + ": "
