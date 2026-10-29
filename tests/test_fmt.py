@@ -109,3 +109,12 @@ def test_reply_to_image_shows_quoted_attachment():
     out = fmt.render_message(m, who, ME)
     assert '↩ replying to Ajmal Aksar' in out
     assert 'card.png (image/png) → get_attachment("spaces/AAA/messages/m10", 0, quoted=true)' in out
+
+
+def test_numbered_list_app_sender_and_private_viewer():
+    m = msg("m11", "222", "Steps:\nDo this\nDo that", formattedText="Steps:\n1. Do this\n2. Do that <users/333>",
+            privateMessageViewer={"name": "users/111"})
+    m["sender"]["type"] = "BOT"
+    out = fmt.render_message(m, who, ME)
+    assert "**Priya [app] (private, only Ajmal Aksar can see it)**" in out
+    assert "1. Do this" in out and "2. Do that @Rahul" in out
