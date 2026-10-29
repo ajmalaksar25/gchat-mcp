@@ -53,5 +53,6 @@ def login() -> None:
     if not CLIENT.exists():
         raise SystemExit(f"Missing OAuth client file: {CLIENT}")
     flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT), SCOPES)
-    _save(flow.run_local_server(port=0, prompt="consent"))
+    # Fixed port: the shared Web client only accepts the registered http://localhost:53682/.
+    _save(flow.run_local_server(port=53682, prompt="consent"))
     print(f"Saved token to {TOKEN}")
