@@ -2,6 +2,7 @@
 import base64
 import re
 import sys
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -287,6 +288,41 @@ def get_attachment(message_id: str, index: int = 0, quoted: bool = False) -> Cal
     else:
         content.append(TextContent(type="text", text="Not shown inline: read the saved file (images and PDFs are readable)."))
     return CallToolResult(content=content)
+
+
+SPACE_RE = re.compile(r"^spaces/[A-Za-z0-9_-]+$")
+
+
+@mcp.tool()
+def send_message(conversation_id: str, messageText: str, thread_id: str = "") -> str:
+    """Post a message AS ME (user auth) to one conversation the caller names explicitly.
+
+    conversation_id: `spaces/XXXX` or bare id, from find_conversations. messageText: Chat-formatted text
+    (*bold*, _italic_, lists kept as written). thread_id: reply in that thread (id or `spaces/X/threads/Y`,
+    same space only); blank starts a new thread. Reads the message back and reports its sender type and
+    visibility, so a send that went out as an app or as private shows at once.
+    """
+    space = _sid(conversation_id.strip())
+    if not SPACE_RE.match(space):
+        raise ValueError(f"Not a conversation id: {conversation_id!r}")
+    if not messageText.strip():
+        raise ValueError("messageText is empty.")
+    params = {"requestId": str(uuid.uuid4())}  # makes the create idempotent, so retries cannot double-post
+    body = {"text": messageText}
+    if thread_id:
+        thread = thread_id if thread_id.startswith("spaces/") else f"{space}/threads/{thread_id}"
+        if not thread.startswith(space + "/threads/"):
+            raise ValueError(f"thread {thread_id!r} is not in {space}.")
+        body["thread"] = {"name": thread}
+        params["messageReplyOption"] = "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD"
+    if not auth.can_send():
+        raise auth.AuthError("The saved sign-in cannot send: run `gchat-mcp login` once to grant chat.messages.create.")
+    sent = chat.post(f"{space}/messages", "messages.create", params, body)
+    m = chat.get(sent["name"], "messages.get")
+    s = m.get("sender", {})
+    seen = f"private, only {chat.who(m['privateMessageViewer'])} can see it" if m.get("privateMessageViewer") else "visible to the conversation"
+    return (f"Sent `{m['name']}` in thread `{m.get('thread', {}).get('name', '')}` to {chat.label(chat.get(space, 'spaces.get'))}.\n"
+            f"Sender: {chat.who(s)} ({s.get('type', 'unknown type')}, {'me' if fmt.uid(s) == chat.me_id() else 'NOT me'}); {seen}.")
 
 
 def main() -> None:

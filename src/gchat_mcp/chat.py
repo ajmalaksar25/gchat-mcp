@@ -19,15 +19,20 @@ class ApiError(RuntimeError):
         self.status = status
 
 
-def _send(path: str, call: str, params: dict | None = None, stream: bool = False) -> requests.Response:
-    """GET a Chat path (or absolute URL), retrying 429/5xx up to 3 times; raise ApiError otherwise."""
+def _send(path: str, call: str, params: dict | None = None, stream: bool = False,
+          json: dict | None = None) -> requests.Response:
+    """GET (or POST when `json` is given) a Chat path, retrying 429/5xx up to 3 times; raise ApiError otherwise.
+
+    POST retries are safe only with an idempotency key such as messages.create `requestId`.
+    """
     global _session
     if _session is None:
         _session = AuthorizedSession(auth.credentials())
     url = path if path.startswith("http") else f"{CHAT}/{path}"
     for attempt in range(4):
         try:
-            r = _session.get(url, params=params, timeout=30, stream=stream)
+            r = (_session.post(url, params=params, json=json, timeout=30) if json is not None
+                 else _session.get(url, params=params, timeout=30, stream=stream))
         except requests.RequestException as e:
             raise ApiError(call, "network error", str(e)) from e
         if r.status_code in (429, 500, 502, 503, 504) and attempt < 3:
@@ -45,6 +50,10 @@ def _send(path: str, call: str, params: dict | None = None, stream: bool = False
 
 def get(path: str, call: str, params: dict | None = None) -> dict:
     return _send(path, call, params).json()
+
+
+def post(path: str, call: str, params: dict, body: dict) -> dict:
+    return _send(path, call, params, json=body).json()
 
 
 def download(resource: str, cap: int) -> bytes:
