@@ -15,10 +15,14 @@ SCOPES = [
     "https://www.googleapis.com/auth/chat.messages.readonly",
     "https://www.googleapis.com/auth/chat.memberships.readonly",
     "https://www.googleapis.com/auth/chat.users.readstate.readonly",
+    "https://www.googleapis.com/auth/chat.messages.create",
     "https://www.googleapis.com/auth/directory.readonly",
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
 ]
+
+
+SEND_SCOPE = "https://www.googleapis.com/auth/chat.messages.create"
 
 
 class AuthError(RuntimeError):
@@ -37,7 +41,8 @@ def credentials() -> Credentials:
     """Load the saved token, refreshing and persisting it if expired. Never opens a browser."""
     if not TOKEN.exists():
         raise AuthError("Google Chat is not authorised: run `gchat-mcp login` in a terminal.")
-    creds = Credentials.from_authorized_user_file(str(TOKEN), SCOPES)
+    # Keep the token's own granted scopes: refreshing with an ungranted scope fails and would break reads.
+    creds = Credentials.from_authorized_user_file(str(TOKEN))
     if not creds.valid:
         if not creds.refresh_token:
             raise AuthError("Saved token has no refresh token: run `gchat-mcp login`.")
@@ -47,6 +52,11 @@ def credentials() -> Credentials:
             raise AuthError(f"Token refresh failed ({e}): run `gchat-mcp login` if this persists.") from e
         _save(creds)
     return creds
+
+
+def can_send() -> bool:
+    c = credentials()
+    return SEND_SCOPE in (c.granted_scopes or c.scopes or [])
 
 
 def login() -> None:
