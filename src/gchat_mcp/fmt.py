@@ -102,6 +102,8 @@ def reaction_line(m: dict, who, me_id: str) -> str:
 def render_message(m: dict, who, me_id: str, space_label: str = "") -> str:
     """One message as a Markdown bullet with quote/forward/attachment/chip sub-lines.
 
+    The short message id follows the time; the full id is `{space}/messages/{short id}`.
+
     `who(user)` maps a User dict or 'users/{id}' string to a display name.
     """
     sender = m.get("sender", {})
@@ -109,7 +111,8 @@ def render_message(m: dict, who, me_id: str, space_label: str = "") -> str:
     if m.get("privateMessageViewer"):
         name += f" (private, only {who(m['privateMessageViewer'])} can see it)"
     text = body(m, who, TEXT_CAP).replace("\n", "\n  ")
-    head = f"- {fmt_time(m['createTime'])} **{name}**: {text}".rstrip()
+    mid = m.get("name", "").split("/messages/")[-1]
+    head = f"- {fmt_time(m['createTime'])} `{mid}` **{name}**: {text}".rstrip()
     subs = []
     q = m.get("quotedMessageMetadata")
     if q:

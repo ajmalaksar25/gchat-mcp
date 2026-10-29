@@ -126,3 +126,10 @@ def test_reactions_counts_then_names():
     m["_reactions"] = [{"emoji": {"unicode": "👍"}, "user": {"name": "users/333"}},
                        {"emoji": {"unicode": "👍"}, "user": {"name": "users/111"}}]
     assert "reactions: 👍 Rahul, Ajmal Aksar (me)" in fmt.render_message(m, who, ME)
+
+
+def test_short_message_id_follows_the_time_on_the_first_line():
+    m = msg("Az1.Az1", "222", "line one\nline two")
+    first = fmt.render_message(m, who, ME).splitlines()[0]
+    assert first.startswith("- ") and "`Az1.Az1` **Priya**: line one" in first
+
