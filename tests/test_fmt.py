@@ -96,5 +96,16 @@ def test_uploaded_attachment_omits_signed_url():
     m = msg("m9", "222", "", attachment=[{"contentName": "log.txt", "contentType": "text/plain",
                                            "downloadUri": "https://chat.google.com/api/get_attachment_url?attachment_token=X"}])
     out = fmt.render_message(m, who, ME)
-    assert "attachment: log.txt (text/plain)" in out
+    assert 'attachment: log.txt (text/plain) → get_attachment("spaces/AAA/messages/m9", 0)' in out
     assert "attachment_token" not in out
+
+
+def test_reply_to_image_shows_quoted_attachment():
+    m = msg("m10", "222", "what is this?", quotedMessageMetadata={
+        "name": "spaces/AAA/messages/m1", "lastUpdateTime": "2026-10-29T08:00:00Z",
+        "quotedMessageSnapshot": {"sender": "Ajmal Aksar", "text": "",
+                                  "attachments": [{"contentName": "card.png", "contentType": "image/png",
+                                                   "attachmentDataRef": {"resourceName": "R"}}]}})
+    out = fmt.render_message(m, who, ME)
+    assert '↩ replying to Ajmal Aksar' in out
+    assert 'card.png (image/png) → get_attachment("spaces/AAA/messages/m10", 0, quoted=true)' in out

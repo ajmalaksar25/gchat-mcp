@@ -19,7 +19,7 @@ class ApiError(RuntimeError):
         self.status = status
 
 
-def get(path: str, call: str, params: dict | None = None) -> dict:
+def _send(path: str, call: str, params: dict | None = None, stream: bool = False) -> requests.Response:
     """GET a Chat path (or absolute URL), retrying 429/5xx up to 3 times; raise ApiError otherwise."""
     global _session
     if _session is None:
@@ -27,7 +27,7 @@ def get(path: str, call: str, params: dict | None = None) -> dict:
     url = path if path.startswith("http") else f"{CHAT}/{path}"
     for attempt in range(4):
         try:
-            r = _session.get(url, params=params, timeout=30)
+            r = _session.get(url, params=params, timeout=30, stream=stream)
         except requests.RequestException as e:
             raise ApiError(call, "network error", str(e)) from e
         if r.status_code in (429, 500, 502, 503, 504) and attempt < 3:
@@ -40,7 +40,23 @@ def get(path: str, call: str, params: dict | None = None) -> dict:
         except Exception:
             msg = r.text[:200]
         raise ApiError(call, r.status_code, msg)
-    return r.json()
+    return r
+
+
+def get(path: str, call: str, params: dict | None = None) -> dict:
+    return _send(path, call, params).json()
+
+
+def download(resource: str, cap: int) -> bytes:
+    """Bytes of an uploaded attachment via media.download; ApiError when larger than `cap`."""
+    r = _send(f"media/{resource}", "media.download", {"alt": "media"}, stream=True)
+    data = bytearray()
+    for chunk in r.iter_content(1 << 16):
+        data += chunk
+        if len(data) > cap:
+            r.close()
+            raise ApiError("media.download", "too large", f"attachment exceeds {cap // (1 << 20)} MB")
+    return bytes(data)
 
 
 def paginate(path: str, key: str, call: str, params: dict, cap: int) -> tuple[list[dict], bool]:

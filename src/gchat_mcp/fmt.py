@@ -55,14 +55,16 @@ def _strings(o):
             yield from _strings(v)
 
 
-def attachment_lines(atts: list[dict]) -> list[str]:
+def attachment_lines(atts: list[dict], msg_name: str, quoted: bool = False) -> list[str]:
+    """One line per attachment: Drive files get their link, uploaded files a get_attachment call."""
     out = []
-    for a in atts:
-        # Uploaded files only have a long signed downloadUri that needs a browser session; skip it.
+    for i, a in enumerate(atts):
         fid = a.get("driveDataRef", {}).get("driveFileId")
-        link = f"https://drive.google.com/file/d/{fid}/view" if fid else ""
-        out.append(f"attachment: {a.get('contentName', 'unnamed')} ({a.get('contentType', 'unknown type')})"
-                   + (f" {link}" if link else ""))
+        if fid:
+            ref = f" https://drive.google.com/file/d/{fid}/view"
+        else:
+            ref = f' → get_attachment("{msg_name}", {i}' + (", quoted=true" if quoted else "") + ")"
+        out.append(f"attachment: {a.get('contentName', 'unnamed')} ({a.get('contentType', 'unknown type')}){ref}")
     return out
 
 
@@ -90,13 +92,14 @@ def render_message(m: dict, who, me_id: str, space_label: str = "") -> str:
             src = q.get("forwardedMetadata", {}).get("spaceDisplayName")
             subs.append(f"↪ forwarded from {qname}" + (f" in {src}" if src else "") + ": "
                         + _clip(snap.get("text", ""), FORWARD_CAP).replace("\n", "\n    "))
-            subs += attachment_lines(snap.get("attachments", []))
+            subs += attachment_lines(snap.get("attachments", []), m["name"], quoted=True)
             ann = annotation_text(snap)
             if ann:
                 subs.append(ann)
         else:  # REPLY is the default when quoteType is unset
             subs.append(f"↩ replying to {qname}: " + _clip(snap.get("text", ""), SNIPPET).replace("\n", " "))
-    subs += attachment_lines(m.get("attachment", []))
+            subs += ["  " + line for line in attachment_lines(snap.get("attachments", []), m["name"], quoted=True)]
+    subs += attachment_lines(m.get("attachment", []), m["name"])
     ann = annotation_text(m)
     if ann:
         subs.append(ann)

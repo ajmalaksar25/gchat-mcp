@@ -1,7 +1,7 @@
 # gchat-mcp
 
 Read-only local stdio MCP server for Google Chat, using the GA Chat REST API under your own Google OAuth (no service account).
-Tools: `find_conversations`, `read_conversation`, `search_messages`, `unread`, `needs_reply`.
+Tools: `find_conversations`, `read_conversation`, `search_messages`, `unread`, `needs_reply`, `get_attachment` (images inline, text files as text, all saved to `~/.cache/gchat-mcp/attachments`; Drive files go to the Google Drive connector).
 
 ## Setup
 1. Put your OAuth "Desktop app" client at `~/.config/gchat-mcp/client_secret.json`.
