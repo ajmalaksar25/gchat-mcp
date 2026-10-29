@@ -199,7 +199,8 @@ def unread(since: str = "") -> str:
 
 @mcp.tool()
 def needs_reply(since: str = "", min_age_minutes: int = 0) -> str:
-    """Find conversations waiting for MY reply, newest first, with the trigger message and 3 prior messages.
+    """Find conversations waiting for MY reply, newest first, with the trigger message and 3 prior messages;
+    older triggers in the same conversation are listed under it.
 
     Reasons: (a) DM/group chat whose last message is from someone else; (b) in a named space, a message
     @-mentioning me after my last message in that thread; (c) a thread I posted in whose last message is from
@@ -226,8 +227,18 @@ def needs_reply(since: str = "", min_age_minutes: int = 0) -> str:
     if not found:
         return _finish(["Nothing needs a reply."], notes)
     why = {"a": "last message is from them", "b": "you were @-mentioned", "c": "they answered a thread you posted in"}
-    out = [f"### {chat.label(s)} (`{s['name']}`) | ({r}) {why[r]}\n" + "\n".join(fmt.render_message(m, chat.who, me) for m in ctx)
-           for s, r, ctx in found]
+    by_space: dict[str, list] = {}
+    for f in found:  # newest first, so each space's first entry is its newest trigger
+        by_space.setdefault(f[0]["name"], []).append(f)
+    out = []
+    for (s, r, ctx), *rest in by_space.values():
+        block = f"### {chat.label(s)} (`{s['name']}`) | ({r}) {why[r]}\n" + "\n".join(
+            fmt.render_message(m, chat.who, me) for m in ctx)
+        if rest:
+            block += f"\nOlder triggers in this conversation ({len(rest)}):\n" + "\n".join(
+                f"({r2}) thread `{c2[-1].get('thread', {}).get('name', '').split('/')[-1]}` "
+                + fmt.render_message(c2[-1], chat.who, me).removeprefix("- ") for _, r2, c2 in rest)
+        out.append(block)
     return _finish(out, notes)
 
 
