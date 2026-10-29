@@ -1,4 +1,5 @@
 """Pure helpers: time/text rendering of Chat Message dicts and the needs-reply rules. No network."""
+import re
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -72,14 +73,25 @@ def _clip(s: str, n: int) -> str:
     return s if len(s) <= n else s[:n] + "…"
 
 
+def body(m: dict, who) -> str:
+    """Message text with list numbers and formatting kept; `<users/ID>` mentions become @Name.
+
+    The plain `text` field drops numbered-list markers, so prefer `formattedText`.
+    """
+    t = m.get("formattedText") or m.get("text", "")
+    return re.sub(r"<(users/[^>|]+)>", lambda x: "@" + who(x.group(1)), t)
+
+
 def render_message(m: dict, who, me_id: str, space_label: str = "") -> str:
     """One message as a Markdown bullet with quote/forward/attachment/chip sub-lines.
 
     `who(user)` maps a User dict or 'users/{id}' string to a display name.
     """
     sender = m.get("sender", {})
-    name = who(sender) + (" (me)" if uid(sender) == me_id else "")
-    text = _clip(m.get("text", ""), TEXT_CAP).replace("\n", "\n  ")
+    name = who(sender) + (" (me)" if uid(sender) == me_id else "") + (" [app]" if sender.get("type") == "BOT" else "")
+    if m.get("privateMessageViewer"):
+        name += f" (private, only {who(m['privateMessageViewer'])} can see it)"
+    text = _clip(body(m, who), TEXT_CAP).replace("\n", "\n  ")
     head = f"- {fmt_time(m['createTime'])} **{name}**: {text}".rstrip()
     subs = []
     q = m.get("quotedMessageMetadata")
@@ -91,13 +103,13 @@ def render_message(m: dict, who, me_id: str, space_label: str = "") -> str:
         if q.get("quoteType") == "FORWARD":
             src = q.get("forwardedMetadata", {}).get("spaceDisplayName")
             subs.append(f"↪ forwarded from {qname}" + (f" in {src}" if src else "") + ": "
-                        + _clip(snap.get("text", ""), FORWARD_CAP).replace("\n", "\n    "))
+                        + _clip(body(snap, who), FORWARD_CAP).replace("\n", "\n    "))
             subs += attachment_lines(snap.get("attachments", []), m["name"], quoted=True)
             ann = annotation_text(snap)
             if ann:
                 subs.append(ann)
         else:  # REPLY is the default when quoteType is unset
-            subs.append(f"↩ replying to {qname}: " + _clip(snap.get("text", ""), SNIPPET).replace("\n", " "))
+            subs.append(f"↩ replying to {qname}: " + _clip(body(snap, who), SNIPPET).replace("\n", " "))
             subs += ["  " + line for line in attachment_lines(snap.get("attachments", []), m["name"], quoted=True)]
     subs += attachment_lines(m.get("attachment", []), m["name"])
     ann = annotation_text(m)
