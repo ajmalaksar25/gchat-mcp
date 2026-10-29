@@ -118,3 +118,11 @@ def test_numbered_list_app_sender_and_private_viewer():
     out = fmt.render_message(m, who, ME)
     assert "**Priya [app] (private, only Ajmal Aksar can see it)**" in out
     assert "1. Do this" in out and "2. Do that @Rahul" in out
+
+
+def test_reactions_counts_then_names():
+    m = msg("m12", "222", "will do", emojiReactionSummaries=[{"emoji": {"unicode": "👍"}, "reactionCount": 2}])
+    assert "reactions: 👍 2" in fmt.render_message(m, who, ME)
+    m["_reactions"] = [{"emoji": {"unicode": "👍"}, "user": {"name": "users/333"}},
+                       {"emoji": {"unicode": "👍"}, "user": {"name": "users/111"}}]
+    assert "reactions: 👍 Rahul, Ajmal Aksar (me)" in fmt.render_message(m, who, ME)

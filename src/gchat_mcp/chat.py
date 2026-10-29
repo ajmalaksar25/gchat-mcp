@@ -56,6 +56,12 @@ def post(path: str, call: str, params: dict, body: dict) -> dict:
     return _send(path, call, params, json=body).json()
 
 
+def reactions(msg_name: str, user: str = "", cap: int = 25) -> list[dict]:
+    """Reactions on one message, optionally only those by `user` (`users/{id}`)."""
+    params = {"pageSize": cap, **({"filter": f'user.name = "{user}"'} if user else {})}
+    return paginate(f"{msg_name}/reactions", "reactions", "reactions.list", params, cap)[0]
+
+
 def download(resource: str, cap: int) -> bytes:
     """Bytes of an uploaded attachment via media.download; ApiError when larger than `cap`."""
     r = _send(f"media/{resource}", "media.download", {"alt": "media"}, stream=True)

@@ -83,6 +83,22 @@ def body(m: dict, who, cap: int) -> str:
     return re.sub(r"<(users/[^>|]+)>", lambda x: "@" + who(x.group(1)), t)
 
 
+def emoji_str(e: dict) -> str:
+    return e.get("unicode") or f":{(e.get('customEmoji', {}).get('emojiName') or 'custom').strip(':')}:"
+
+
+def reaction_line(m: dict, who, me_id: str) -> str:
+    """'reactions: 👍 Caleb, Ajmal Aksar (me)' when reactors were fetched, else 'reactions: 👍 2'."""
+    if m.get("_reactions") is not None:
+        by: dict[str, list[str]] = {}
+        for r in m["_reactions"]:
+            u = r.get("user", {})
+            by.setdefault(emoji_str(r.get("emoji", {})), []).append(who(u) + (" (me)" if uid(u) == me_id else ""))
+        return "reactions: " + "; ".join(f"{e} {', '.join(n)}" for e, n in by.items()) if by else ""
+    sums = m.get("emojiReactionSummaries", [])
+    return "reactions: " + ", ".join(f"{emoji_str(x.get('emoji', {}))} {x.get('reactionCount', 0)}" for x in sums) if sums else ""
+
+
 def render_message(m: dict, who, me_id: str, space_label: str = "") -> str:
     """One message as a Markdown bullet with quote/forward/attachment/chip sub-lines.
 
@@ -116,6 +132,9 @@ def render_message(m: dict, who, me_id: str, space_label: str = "") -> str:
     ann = annotation_text(m)
     if ann:
         subs.append(ann)
+    react = reaction_line(m, who, me_id)
+    if react:
+        subs.append(react)
     return "\n".join([head] + ["  " + s for s in subs])
 
 
