@@ -1,14 +1,22 @@
-"""FastMCP server: five read-only Google Chat tools over stdio. `gchat-mcp login` authorises."""
+"""FastMCP server: read-only Google Chat tools over stdio. `gchat-mcp login` authorises."""
+import base64
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult, ImageContent, TextContent
 
 from . import auth, chat, fmt
 
 mcp = FastMCP("gchat")
 MAX_SPACES, MAX_PER_SPACE, OUT_CAP = 60, 500, 40000
+ATTACH_CAP, INLINE_IMAGE_CAP = 25 << 20, 3_750_000  # inline cap keeps base64 under the 5 MB image limit
+ATTACH_DIR = Path.home() / ".cache" / "gchat-mcp" / "attachments"
+IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+TEXT_TYPES = ("text/", "application/json", "application/xml", "application/x-yaml", "application/csv")
 
 
 def _sid(x: str) -> str:
@@ -240,6 +248,45 @@ def needs_reply(since: str = "", min_age_minutes: int = 0) -> str:
                 + fmt.render_message(c2[-1], chat.who, me).removeprefix("- ") for _, r2, c2 in rest)
         out.append(block)
     return _finish(out, notes)
+
+
+@mcp.tool()
+def get_attachment(message_id: str, index: int = 0, quoted: bool = False) -> CallToolResult:
+    """Fetch one attachment named in another tool's output by its get_attachment("...", n) reference.
+
+    message_id: full `spaces/X/messages/Y`. index: position among that message's attachments.
+    quoted: the attachment belongs to the quoted or forwarded message shown under it.
+    Images come back inline, text files as text; every file is also saved locally and the path given.
+    Drive files are not downloaded here: the result gives the Drive file id for the Google Drive connector.
+    """
+    m = chat.get(_sid(message_id), "messages.get")
+    atts = (m.get("quotedMessageMetadata", {}).get("quotedMessageSnapshot", {}).get("attachments", [])
+            if quoted else m.get("attachment", []))
+    if not 0 <= index < len(atts):
+        raise ValueError(f"{message_id} has {len(atts)} {'quoted ' if quoted else ''}attachment(s); index {index} is out of range.")
+    a = atts[index]
+    name, ctype = a.get("contentName", "attachment"), a.get("contentType", "")
+    fid = a.get("driveDataRef", {}).get("driveFileId")
+    if fid:
+        return CallToolResult(content=[TextContent(type="text", text=(
+            f"{name} ({ctype}) is a Google Drive file, id `{fid}`. Read it with the Google Drive connector "
+            "(read_file_content or download_file_content with this file id)."))])
+    resource = a.get("attachmentDataRef", {}).get("resourceName")
+    if not resource:
+        raise ValueError(f"{name} has no downloadable data reference (source: {a.get('source', 'unknown')}).")
+    data = chat.download(resource, ATTACH_CAP)
+    ATTACH_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = ATTACH_DIR / f"{message_id.split('/')[-1]}_{int(quoted)}_{index}_{re.sub(r'[^\w.-]', '_', name)}"
+    path.write_bytes(data)
+    content = [TextContent(type="text", text=f"{name} ({ctype}, {len(data) / 1024:.0f} KB) saved to {path}")]
+    if ctype in IMAGE_TYPES and len(data) <= INLINE_IMAGE_CAP:
+        content.append(ImageContent(type="image", data=base64.b64encode(data).decode(), mimeType=ctype))
+    elif ctype.startswith(TEXT_TYPES):
+        text = data.decode("utf-8", errors="replace")
+        content.append(TextContent(type="text", text=text[:OUT_CAP] + ("\n…(truncated)" if len(text) > OUT_CAP else "")))
+    else:
+        content.append(TextContent(type="text", text="Not shown inline: read the saved file (images and PDFs are readable)."))
+    return CallToolResult(content=content)
 
 
 def main() -> None:
