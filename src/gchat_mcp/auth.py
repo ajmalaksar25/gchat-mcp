@@ -16,6 +16,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/chat.memberships.readonly",
     "https://www.googleapis.com/auth/chat.users.readstate.readonly",
     "https://www.googleapis.com/auth/chat.messages.create",
+    "https://www.googleapis.com/auth/chat.messages.reactions.create",
     "https://www.googleapis.com/auth/directory.readonly",
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
@@ -23,6 +24,7 @@ SCOPES = [
 
 
 SEND_SCOPE = "https://www.googleapis.com/auth/chat.messages.create"
+REACT_SCOPE = "https://www.googleapis.com/auth/chat.messages.reactions.create"
 
 
 class AuthError(RuntimeError):
@@ -54,9 +56,17 @@ def credentials() -> Credentials:
     return creds
 
 
-def can_send() -> bool:
+def _granted(scope: str) -> bool:
     c = credentials()
-    return SEND_SCOPE in (c.granted_scopes or c.scopes or [])
+    return scope in (c.granted_scopes or c.scopes or [])
+
+
+def can_send() -> bool:
+    return _granted(SEND_SCOPE)
+
+
+def can_react() -> bool:
+    return _granted(REACT_SCOPE)
 
 
 def login() -> None:
