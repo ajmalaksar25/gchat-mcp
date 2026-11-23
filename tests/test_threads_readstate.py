@@ -223,3 +223,16 @@ def test_edit_with_markup_and_a_mention(srv):
                     for i, n in {"111": "Me Me", "222": "Priya Shah", "333": "Rahul K", "444": "Dev Rao"}.items()}
     out = server.edit_message(SENT, "*hi* @[priya@x.com]")
     assert "text verified, mentions confirmed" in out
+
+
+# --- Devin on PR #3: the query bound is one ms early; only replies at or after the cutoff may select a thread
+def test_sweep_ignores_replies_before_the_cutoff_even_by_half_a_millisecond(srv):
+    srv.markers[SPACE_M] = "2026-11-23T15:00:00Z"
+    put(srv, "at", "2026-11-23T14:00:00Z", "TA", reply=True)  # exactly at the cutoff: selected
+    put(srv, "before", "2026-11-23T13:59:59.999500Z", "TB", reply=True)  # 0.5 ms before: not selected
+    for t in ("TA", "TB"):
+        srv.markers[thread_m(t)] = "2026-11-23T15:00:00Z"
+    server.mark_unread("AAA", since="2026-11-23T14:00:00Z")
+    assert srv.markers[thread_m("TA")] == "2026-11-23T13:59:59.999000Z"
+    assert srv.markers[thread_m("TB")] == "2026-11-23T15:00:00Z"  # untouched
+    assert patched(srv) == ["spaceReadState", "threads/TA/threadReadState"]
