@@ -1,0 +1,75 @@
+"""Pure helpers for @mentions: find `@[Name or email]` tokens, resolve each to a space member, insert `<users/ID>`.
+
+Chat renders `<users/{id}>` in message text as a mention (docs: format-messages, "Mention users in a text message").
+Raw `<users/...>` already in the text is left alone.
+"""
+import re
+
+from . import fmt
+
+TOKEN_RE = re.compile(r"@\[([^\[\]\n]{1,100})\]")
+
+
+class MentionError(ValueError):
+    pass
+
+
+class NoMatch(MentionError):
+    pass
+
+
+class NotInSpace(MentionError):
+    pass
+
+
+class Ambiguous(MentionError):
+    pass
+
+
+def extract(text: str) -> list[str]:
+    """Distinct mention queries in order of first use."""
+    return list(dict.fromkeys(q.strip() for q in TOKEN_RE.findall(text) if q.strip()))
+
+
+def _label(c: dict) -> str:
+    return f"{c['name'] or '(no name)'} <{c['emails'][0]}>" if c.get("emails") else (c.get("name") or c["id"])
+
+
+def _words_match(query: str, name: str) -> bool:
+    words = name.casefold().split()
+    return all(any(w.startswith(q) for w in words) for q in query.casefold().split())
+
+
+def resolve(query: str, candidates: list[dict], member_ids) -> str:
+    """The `users/{id}` for `query` among `candidates` ({'id','name','emails'}) who are in `member_ids`.
+
+    An email matches exactly (case-insensitive); a name matches exactly, else every word as a name-word prefix.
+    NoMatch: nobody found. NotInSpace: found, but not a member. Ambiguous: several members match.
+    """
+    q = query.strip()
+    if "@" in q:
+        found = [c for c in candidates if q.casefold() in [e.casefold() for e in c.get("emails", [])]]
+    else:
+        found = [c for c in candidates if c["name"].casefold() == q.casefold()] or [
+            c for c in candidates if _words_match(q, c["name"])]
+    if not found:
+        raise NoMatch(f"No one matches {q!r} in the directory or this space.")
+    inside = [c for c in found if c["id"] in member_ids]
+    if not inside:
+        raise NotInSpace(f"{', '.join(_label(c) for c in found)} is not a member of this space.")
+    if len(inside) > 1:
+        raise Ambiguous(f"{q!r} matches {len(inside)} members: {'; '.join(_label(c) for c in inside)}. "
+                        "Use the full email address.")
+    return f"users/{inside[0]['id']}"
+
+
+def insert(text: str, resolved: dict[str, str]) -> str:
+    """Replace each `@[query]` token with `<users/ID>` using `resolved` {query: 'users/ID'}."""
+    return TOKEN_RE.sub(lambda m: f"<{resolved[m.group(1).strip()]}>" if m.group(1).strip() else m.group(0), text)
+
+
+def missing(message: dict, expected: list[str]) -> list[str]:
+    """Expected `users/ID`s with no USER_MENTION annotation in the read-back message."""
+    seen = {fmt.uid(a.get("userMention", {}).get("user")) for a in message.get("annotations", [])
+            if a.get("type") == "USER_MENTION"}
+    return [u for u in expected if fmt.uid(u) not in seen]
