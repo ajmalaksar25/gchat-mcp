@@ -8,6 +8,14 @@ import re
 from . import fmt
 
 TOKEN_RE = re.compile(r"@\[([^\[\]\n]{1,100})\]")
+# `@all` (bare, not inside an email or word) and `@[all]`/`@[everyone]` mention everyone: Chat's `<users/all>`.
+BARE_ALL_RE = re.compile(r"(?<![\w.@])@all\b(?![@.]\w)")
+ALL = "users/all"
+ALL_WORDS = {"all", "everyone"}
+
+
+def is_all(query: str) -> bool:
+    return query.strip().casefold() in ALL_WORDS
 
 
 class MentionError(ValueError):
@@ -26,8 +34,13 @@ class Ambiguous(MentionError):
     pass
 
 
+def normalize(text: str) -> str:
+    """Turn a bare `@all` into the `@[all]` token form, so it is resolved and verified like any mention."""
+    return BARE_ALL_RE.sub("@[all]", text)
+
+
 def extract(text: str) -> list[str]:
-    """Distinct mention queries in order of first use."""
+    """Distinct mention queries in order of first use (call on normalized text)."""
     return list(dict.fromkeys(q.strip() for q in TOKEN_RE.findall(text) if q.strip()))
 
 
@@ -72,4 +85,16 @@ def missing(message: dict, expected: list[str]) -> list[str]:
     """Expected `users/ID`s with no USER_MENTION annotation in the read-back message."""
     seen = {fmt.uid(a.get("userMention", {}).get("user")) for a in message.get("annotations", [])
             if a.get("type") == "USER_MENTION"}
+    text = message.get("text", "")
+
+    def is_all_annotation(a: dict) -> bool:
+        # Live read-back (23 Nov 2026): @all comes back as USER_MENTION with an empty `user`, over the text "@all".
+        um = a.get("userMention", {})
+        if um.get("type") == "MENTION_ALL":
+            return True
+        i, n = a.get("startIndex"), a.get("length")
+        return not um.get("user") and isinstance(i, int) and isinstance(n, int) and text[i:i + n] == "@all"
+
+    if any(a.get("type") == "USER_MENTION" and is_all_annotation(a) for a in message.get("annotations", [])):
+        seen.add(fmt.uid(ALL))
     return [u for u in expected if fmt.uid(u) not in seen]
