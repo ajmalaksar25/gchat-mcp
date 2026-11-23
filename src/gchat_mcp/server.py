@@ -412,7 +412,8 @@ def _mentions(space: str, text: str) -> tuple[str, list[str]]:
     queries = mentions.extract(text)
     if not queries:
         return text, []
-    members = chat.member_ids(space)
+    # `@all` resolves nobody: it needs no member list (member_ids refuses spaces over 1,000 memberships).
+    members = chat.member_ids(space) if any(not mentions.is_all(q) for q in queries) else set()
     scan, resolved = None, {}
     for q in queries:
         first = None
