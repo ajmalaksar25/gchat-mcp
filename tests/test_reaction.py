@@ -75,11 +75,23 @@ def test_remove_without_a_reaction_calls_nothing(api):
     assert calls == []
 
 
-def test_duplicate_reaction_is_reported_not_raised(api, monkeypatch):
+def test_duplicate_409_is_believed_only_after_the_read_back(api, monkeypatch):
     def dup(*a):
         raise chat.ApiError("reactions.create", 409, "already exists")
     monkeypatch.setattr(chat, "post", dup)
+    api[1].append({"name": f"{MSG}/reactions/r9", "emoji": {"unicode": "👍"}, "user": {"name": "users/111"}})
     assert "already have 👍" in server.react(MSG, "👍")
+    api[1].clear()  # a 409 but nothing of mine shows: do not claim success
+    with pytest.raises(chat.ApiError, match="409"):
+        server.react(MSG, "👍")
+
+
+def test_failed_read_back_after_a_reaction_is_not_an_error(api, monkeypatch):
+    def boom(*a, **k):
+        raise chat.ApiError("reactions.list", 500, "down")
+    monkeypatch.setattr(chat, "reactions", boom)
+    out = server.react(MSG, "👍")
+    assert "could not verify" in out and "do not repeat" in out
 
 
 @pytest.mark.parametrize("message_id", ["spaces/AAA", "AAA/messages/m1", "spaces/AAA/messages/"])

@@ -27,17 +27,8 @@ SCOPES = [
 ]
 
 
-_provider = None
-
-
 class AuthError(RuntimeError):
     pass
-
-
-def set_credentials_provider(fn) -> None:
-    """Replace where credentials come from (a hosted deployment supplies per-request user credentials)."""
-    global _provider
-    _provider = fn
 
 
 def _save(creds: Credentials) -> None:
@@ -49,12 +40,10 @@ def _save(creds: Credentials) -> None:
 
 
 def credentials() -> Credentials:
-    """The one source of user credentials. Default: the saved token, refreshed and persisted if expired.
+    """The one source of user credentials: the saved token, refreshed and persisted if expired.
 
-    Never opens a browser.
+    Never opens a browser. Every Google call gets its credentials here and nowhere else.
     """
-    if _provider:
-        return _provider()
     if not TOKEN.exists():
         raise AuthError("Google Chat is not authorised: run `gchat-mcp login` in a terminal.")
     # Keep the token's own granted scopes: refreshing with an ungranted scope fails and would break reads.
