@@ -21,7 +21,7 @@ A write that the API refuses for a missing grant (403 insufficient scope) says t
 3. `uv run gchat-mcp login` (opens a browser once; token saved to `~/.config/gchat-mcp/token.json`, mode 0600). Run it again after an upgrade adds scopes.
 4. Register (all aliases):
    `env -u CLAUDE_CONFIG_DIR claude mcp add -s user gchat-local -- uv run --directory /Users/ajmalaksar/Documents/projects/gchat-mcp gchat-mcp`
-5. Every write is approved through the PreToolUse hook `~/.claude/hooks/gchat-footer.py` (matcher in each alias's `settings.json`; it also adds the footer to message text).
+5. Every write is approved through the PreToolUse hook `~/.claude/hooks/gchat-footer.py` (a reference copy is in `hooks/`; matcher in each alias's `settings.json`). It adds the footer to message text and, for `send_file`, shows the resolved path, size and SHA-256 and passes `expect_stat` and `expect_sha256` so the server refuses a file that changed after approval.
 
 The server never opens a browser; without a valid token every tool says to run `gchat-mcp login`. Credentials come from one function, `auth.credentials()`.
 Tests: `uv run pytest -q`.

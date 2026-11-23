@@ -6,6 +6,7 @@ descriptor is what gets uploaded.
 """
 import errno
 import fnmatch
+import hashlib
 import os
 import stat
 from pathlib import Path
@@ -44,7 +45,12 @@ def fd_path(fd: int) -> Path:
     return Path(os.readlink(f"/proc/self/fd/{fd}"))
 
 
-def open_checked(path: str, cap: int, home: Path | None = None):
+def fingerprint(st) -> str:
+    """`dev:ino:size:mtime_ns` of a stat result; what the approval hook records and send_file re-checks."""
+    return f"{st.st_dev}:{st.st_ino}:{st.st_size}:{st.st_mtime_ns}"
+
+
+def open_checked(path: str, cap: int, home: Path | None = None, expect_stat: str = "", expect_sha256: str = ""):
     """(binary file object, real path, size) for an upload; ValueError when refused. Caller closes the file."""
     p = os.path.expanduser(path)
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
@@ -59,12 +65,28 @@ def open_checked(path: str, cap: int, home: Path | None = None):
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
             raise ValueError(f"Not a regular file: {path!r}")
+        if st.st_nlink > 1:
+            raise ValueError(f"Refusing {path!r}: it has {st.st_nlink} hard links, so its name proves nothing about "
+                             "what is behind it. Copy it to a fresh file and send that.")
         real = fd_path(fd)
         why = denied(real, home or Path.home())
         if why:
             raise ValueError(f"Refusing to upload {real.name}: {why} (credentials or secrets location).")
         if not 0 < st.st_size <= cap:
             raise ValueError(f"{real.name} is {st.st_size / (1 << 20):.1f} MB: Chat accepts 1 byte to {cap >> 20} MB.")
+        if expect_stat and expect_stat != fingerprint(st):
+            raise ValueError(f"Refusing {real.name}: it is not the file that was approved (device/inode/size/mtime "
+                             "changed since the approval prompt). Ask again.")
+        if expect_sha256:
+            h, n = hashlib.sha256(), 0
+            while chunk := os.read(fd, 1 << 20):
+                h.update(chunk)
+                n += len(chunk)
+            os.lseek(fd, 0, os.SEEK_SET)
+            after = os.fstat(fd)
+            if h.hexdigest() != expect_sha256.lower() or fingerprint(after) != fingerprint(st):
+                raise ValueError(f"Refusing {real.name}: its bytes are not the ones that were approved (sha256 differs "
+                                 "or the file changed while being read). Ask again.")
         f = os.fdopen(fd, "rb")
         keep = True
         return f, real, st.st_size

@@ -1,10 +1,12 @@
 """Google Chat / People REST client: retries, paginated lists, name and label resolution."""
+import contextvars
 import hashlib
 import io
 import json
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 
 import requests
 from google.auth.transport.requests import AuthorizedSession
@@ -19,18 +21,45 @@ _people: dict[str, dict] = {}
 _labels: dict[str, str] = {}
 
 
-def _session_for() -> tuple[AuthorizedSession, str]:
-    """(session, grant key) for whoever `auth.credentials()` says is calling now.
+_call_box: contextvars.ContextVar[dict | None] = contextvars.ContextVar("gchat_call_box", default=None)
 
-    Sessions and identities are cached per grant (hash of client id + refresh token), never process-wide, so a
-    different caller's credentials get their own session and their own `me`.
-    """
+
+def _acquire() -> tuple[AuthorizedSession, str]:
+    """(session, grant key) from `auth.credentials()`. Sessions are cached per grant (hash of client id +
+    refresh token), never process-wide, so another caller's credentials get their own session and `me`."""
     with _lock:
         creds = auth.credentials()
         key = hashlib.sha256(f"{creds.client_id}\0{creds.refresh_token or creds.token}".encode()).hexdigest()
         if key not in _sessions:
             _sessions[key] = AuthorizedSession(creds)
         return _sessions[key], key
+
+
+@contextmanager
+def call():
+    """One tool call: credentials are loaded once (on first use) and the same session and grant serve every
+    request and the `me` lookup of the call, including pool threads that run in a copy of this context."""
+    if _call_box.get() is not None:  # nested tool call (add_reaction -> react): keep the outer grant
+        yield
+        return
+    token = _call_box.set({})
+    try:
+        yield
+    finally:
+        _call_box.reset(token)
+
+
+def _session_for() -> tuple[AuthorizedSession, str]:
+    box = _call_box.get()
+    if box is None:  # outside a tool call: still one lookup per request, never cached across callers
+        return _acquire()
+    with _lock:
+        have = box.get("grant")
+    if have is None:
+        got = _acquire()
+        with _lock:
+            have = box.setdefault("grant", got)
+    return have
 
 
 class ApiError(RuntimeError):
@@ -208,6 +237,15 @@ def person_strict(user) -> dict:
         email = next((e["value"] for e in p.get("emailAddresses", [])), "")
         _people[i] = {"name": next((n["displayName"] for n in p.get("names", [])), email or "Unknown"), "email": email}
     return _people[i]
+
+
+def profile_fresh(user) -> dict:
+    """{'name','email'} read from the People API now: no cache, no fallback (name '' when there is none);
+    ApiError when the profile cannot be read."""
+    p = get(f"https://people.googleapis.com/v1/people/{fmt.uid(user)}", "people.get",
+            {"personFields": "names,emailAddresses"})
+    return {"name": next((n.get("displayName", "") for n in p.get("names", [])), "").strip(),
+            "email": next((e["value"] for e in p.get("emailAddresses", [])), "")}
 
 
 def who(user) -> str:

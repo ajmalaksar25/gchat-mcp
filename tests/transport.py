@@ -37,7 +37,18 @@ class ChatServer:
         self.deny = set()  # "METHOD path-regex" -> answered with the insufficient-scope 403
         self.rewrite = lambda path, value: value  # what Chat does to a marker it is given
         self.patch_delay = 0.0
-        self.reactions = {}
+        self.reactions = {}  # id -> (message name, emoji, user name)
+        self._rid = 0
+        self.space_type = "SPACE"
+        self.profiles = {}  # user id -> {"name":..., "email":...} served by the People API
+        self.force_409 = False
+        self.ignore_user_filter = False  # simulate a broken reactions.list filter
+        self.break_reads = False  # after the first write, every GET answers 503
+        self.wrote = False
+
+    def add_reaction(self, msg, emoji, user=f"users/{ME}"):
+        self._rid += 1
+        self.reactions[self._rid] = (msg, emoji, user)
 
     def request(self, method, url, params=None, json=None, data=None, headers=None, timeout=None, stream=False):
         path = url.split("googleapis.com/", 1)[-1]
@@ -50,9 +61,23 @@ class ChatServer:
             m, rx = rule.split(" ", 1)
             if m == method and re.search(rx, path):
                 return scope_denied()
-        return self.route(method, path, params, json, body)
+        if method == "GET" and self.wrote and self.break_reads:
+            return reply(503, {"error": {"code": 503, "message": "backend unavailable", "status": "UNAVAILABLE"}})
+        out = self.route(method, path, params, json, body)
+        if method != "GET" and out.status_code < 400:
+            self.wrote = True
+        return out
 
     def route(self, method, path, params, js, body):
+        m = re.match(r"v1/people/(\w+)$", path.replace("https://people.googleapis.com/", "")) or re.match(r"(?:v1/)?people/(\w+)$", path)
+        if m:
+            prof = self.profiles.get(m[1])
+            if prof is None:
+                return reply(404, {"error": {"message": "no such person"}})
+            return reply(200, {"names": [{"displayName": prof["name"]}] if prof.get("name") else [],
+                               "emailAddresses": [{"value": prof["email"]}] if prof.get("email") else []})
+        if path == "v1/spaces:setup":
+            return reply(200, {"name": "spaces/NEW", "spaceType": js["space"]["spaceType"], "displayName": js["space"].get("displayName", "")})
         if path.endswith("oauth2/v2/userinfo"):
             return reply(200, {"id": ME, "email": "ajmal@x.com"})
         if path.startswith("upload/v1/") and path.endswith("attachments:upload"):
@@ -79,7 +104,7 @@ class ChatServer:
             page = self.members[start:start + self.page_size]
             end = start + self.page_size
             return reply(200, {"memberships": page, **({"nextPageToken": str(end)} if end < len(self.members) else {})})
-        if re.match(r"v1/spaces/[^/]+/messages/[^/]+$", path):
+        if method == "GET" and re.match(r"v1/spaces/[^/]+/messages/[^/]+$", path):
             return reply(200, self.messages[path[3:]]) if path[3:] in self.messages else reply(404, {"error": {"message": "nf"}})
         if re.match(r"v1/users/[^/]+/spaces/.+ReadState$", path):
             key = path[3:]
@@ -89,17 +114,26 @@ class ChatServer:
             return reply(200, {"name": key, "lastReadTime": self.markers.get(key, "")})
         m = re.match(r"v1/(spaces/[^/]+/messages/[^/]+)/reactions$", path)
         if m and method == "POST":
-            key = (m[1], body["emoji"]["unicode"])
-            if key in self.reactions:
+            if self.force_409 or any(v == (m[1], js["emoji"]["unicode"], f"users/{ME}") for v in self.reactions.values()):
                 return reply(409, {"error": {"code": 409, "message": "exists", "status": "ALREADY_EXISTS"}})
-            self.reactions[key] = True
+            self.add_reaction(m[1], js["emoji"]["unicode"])
             return reply(200, {})
         if m and method == "GET":
-            allr = [{"name": f"{k[0]}/reactions/{i}", "emoji": {"unicode": k[1]}, "user": {"name": f"users/{ME}"}}
-                    for i, k in enumerate(self.reactions) if k[0] == m[1]]
+            who = re.search(r'user\.name = "([^"]+)"', params.get("filter", ""))
+            allr = [{"name": f"{v[0]}/reactions/{i}", "emoji": {"unicode": v[1]}, "user": {"name": v[2]}}
+                    for i, v in self.reactions.items() if v[0] == m[1]
+                    and (self.ignore_user_filter or not who or v[2] == who[1])]
             start, size = int(params.get("pageToken", 0)), int(params.get("pageSize", 100))
             return reply(200, {"reactions": allr[start:start + size],
                                **({"nextPageToken": str(start + size)} if start + size < len(allr) else {})})
+        m = re.match(r"v1/spaces/[^/]+/messages/[^/]+/reactions/(\d+)$", path)
+        if m and method == "DELETE":
+            self.reactions.pop(int(m[1]), None)
+            return reply(200, {})
+        m = re.match(r"v1/(spaces/[^/]+/messages/[^/]+)$", path)
+        if m and method == "DELETE":
+            self.messages[m[1]]["deleteTime"] = "2026-11-23T14:06:00Z"
+            return reply(200, {})
         if re.match(r"v1/spaces/[^/]+$", path):
-            return reply(200, {"name": path[3:], "displayName": "Team", "spaceType": "SPACE"})
+            return reply(200, {"name": path[3:], "displayName": "Team", "spaceType": self.space_type})
         raise AssertionError(f"unrouted {method} {path}")
