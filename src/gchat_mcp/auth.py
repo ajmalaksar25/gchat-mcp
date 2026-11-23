@@ -17,18 +17,27 @@ SCOPES = [
     "https://www.googleapis.com/auth/chat.users.readstate.readonly",
     "https://www.googleapis.com/auth/chat.messages.create",
     "https://www.googleapis.com/auth/chat.messages.reactions.create",
+    "https://www.googleapis.com/auth/chat.messages",  # edit_message, delete_message (messages.patch / messages.delete)
+    "https://www.googleapis.com/auth/chat.messages.reactions",  # react(remove=True) (reactions.delete)
+    "https://www.googleapis.com/auth/chat.users.readstate",  # mark_read, mark_unread (read-state updates)
+    "https://www.googleapis.com/auth/chat.spaces.create",  # start_conversation (spaces.setup)
     "https://www.googleapis.com/auth/directory.readonly",
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
 ]
 
 
-SEND_SCOPE = "https://www.googleapis.com/auth/chat.messages.create"
-REACT_SCOPE = "https://www.googleapis.com/auth/chat.messages.reactions.create"
+_provider = None
 
 
 class AuthError(RuntimeError):
     pass
+
+
+def set_credentials_provider(fn) -> None:
+    """Replace where credentials come from (a hosted deployment supplies per-request user credentials)."""
+    global _provider
+    _provider = fn
 
 
 def _save(creds: Credentials) -> None:
@@ -40,7 +49,12 @@ def _save(creds: Credentials) -> None:
 
 
 def credentials() -> Credentials:
-    """Load the saved token, refreshing and persisting it if expired. Never opens a browser."""
+    """The one source of user credentials. Default: the saved token, refreshed and persisted if expired.
+
+    Never opens a browser.
+    """
+    if _provider:
+        return _provider()
     if not TOKEN.exists():
         raise AuthError("Google Chat is not authorised: run `gchat-mcp login` in a terminal.")
     # Keep the token's own granted scopes: refreshing with an ungranted scope fails and would break reads.
@@ -54,19 +68,6 @@ def credentials() -> Credentials:
             raise AuthError(f"Token refresh failed ({e}): run `gchat-mcp login` if this persists.") from e
         _save(creds)
     return creds
-
-
-def _granted(scope: str) -> bool:
-    c = credentials()
-    return scope in (c.granted_scopes or c.scopes or [])
-
-
-def can_send() -> bool:
-    return _granted(SEND_SCOPE)
-
-
-def can_react() -> bool:
-    return _granted(REACT_SCOPE)
 
 
 def login() -> None:

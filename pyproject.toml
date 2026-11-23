@@ -1,7 +1,7 @@
 [project]
 name = "gchat-mcp"
-version = "0.1.0"
-description = "Read-only local stdio MCP server for Google Chat (user OAuth, GA REST API)"
+version = "0.2.0"
+description = "Local stdio MCP server for Google Chat (user OAuth, GA REST API)"
 requires-python = ">=3.13"
 dependencies = ["mcp>=1.12,<2", "google-auth>=2.30", "google-auth-oauthlib>=1.2", "requests>=2.32"]
 
