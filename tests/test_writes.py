@@ -74,7 +74,8 @@ def fake(monkeypatch):
     monkeypatch.setattr(chat, "label", lambda s: s.get("displayName", "x"))
     monkeypatch.setattr(chat, "person", lambda u: dict(zip(("name", "email"), PEOPLE.get(chat.fmt.uid(u), ("Unknown", "")))))
     monkeypatch.setattr(chat, "messages", lambda space, since="", thread="", cap=500: ([{"name": "m"}] if thread else [], False))
-    monkeypatch.setattr(chat, "person_strict", chat.person)
+    monkeypatch.setattr(chat, "profile_fresh", lambda u: {"name": PEOPLE.get(chat.fmt.uid(u), ("", ""))[0],
+                                                          "email": PEOPLE.get(chat.fmt.uid(u), ("", ""))[1]})
     monkeypatch.setattr(chat, "member_ids", lambda space, cap=1000: set(f.members))
     monkeypatch.setattr(chat, "directory_search", lambda q, cap=20: [
         {"id": i, "name": n, "emails": [e]} for i, (n, e) in PEOPLE.items()])
@@ -266,7 +267,7 @@ def test_send_whose_read_back_fails_says_it_was_posted(fake, monkeypatch):
     monkeypatch.setattr(chat, "post", post)
     monkeypatch.setattr(chat, "get", get)
     out = server.send_message("AAA", "hello")
-    assert "could not read it back" in out and "do not send it again" in out
+    assert "could not verify" in out and "WAS accepted" in out and "do not repeat" in out
 
 
 # --- start_conversation: an existing space returned by setup is "opened", not "created"
@@ -404,3 +405,92 @@ def test_start_conversation_validates_input(fake, emails, name):
     with pytest.raises(ValueError):
         server.start_conversation(emails, name)
     assert fake.calls == []
+
+
+# --- last review round: hard links and approval binding
+import hashlib
+import os
+
+from gchat_mcp import safefile
+
+
+def _stat(p):
+    return safefile.fingerprint(os.stat(p))
+
+
+def _no_upload(monkeypatch):
+    monkeypatch.setattr(chat, "upload", lambda *a: pytest.fail("uploaded"))
+
+
+def test_send_file_refuses_a_hard_linked_file(fake, home, monkeypatch):
+    _no_upload(monkeypatch)
+    (home / "a.txt").write_text("hello")
+    os.link(home / "a.txt", home / "b.txt")
+    for name in ("a.txt", "b.txt"):
+        with pytest.raises(ValueError, match="hard links"):
+            server.send_file("AAA", str(home / name))
+    assert fake.calls == []
+
+
+def test_send_file_accepts_the_approved_stat_and_refuses_a_changed_file(fake, home, monkeypatch):
+    f = home / "a.txt"
+    f.write_text("hello")
+    approved = _stat(f)
+    seen = []
+    monkeypatch.setattr(chat, "upload", lambda space, name, mime, fh, size: seen.append(fh.read()) or {"attachmentUploadToken": "t"})
+    server.send_file("AAA", str(f), expect_stat=approved)
+    assert seen == [b"hello"]
+    f.write_text("hello, and now more")  # edited after approval
+    with pytest.raises(ValueError, match="not the file that was approved"):
+        server.send_file("AAA", str(f), expect_stat=approved)
+
+
+def test_send_file_refuses_a_different_file_swapped_in_at_the_same_path(fake, home, monkeypatch):
+    _no_upload(monkeypatch)
+    f = home / "a.txt"
+    f.write_text("hello")
+    approved = _stat(f)
+    other = home / "other.txt"
+    other.write_text("hello")  # same bytes and size, new inode
+    os.replace(other, f)
+    with pytest.raises(ValueError, match="not the file that was approved"):
+        server.send_file("AAA", str(f), expect_stat=approved)
+
+
+def test_send_file_checks_the_bytes_against_the_approved_sha256(fake, home, monkeypatch):
+    f = home / "a.txt"
+    f.write_bytes(b"AAAA")
+    sha = hashlib.sha256(b"AAAA").hexdigest()
+    seen = []
+    monkeypatch.setattr(chat, "upload", lambda space, name, mime, fh, size: seen.append(fh.read()) or {"attachmentUploadToken": "t"})
+    server.send_file("AAA", str(f), expect_sha256=sha)
+    assert seen == [b"AAAA"]  # the descriptor was rewound after hashing
+    st = os.stat(f)
+    f.write_bytes(b"BBBB")  # same size, same inode, mtime put back: only the bytes differ
+    os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns))
+    _no_upload(monkeypatch)
+    sent = len(fake.calls)
+    with pytest.raises(ValueError, match="not the ones that were approved"):
+        server.send_file("AAA", str(f), expect_stat=_stat(f), expect_sha256=sha)
+    assert len(fake.calls) == sent
+
+
+def test_installed_hook_binds_the_approval_to_the_bytes_the_server_checks(fake, home, monkeypatch):
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+    f = home / "a.txt"
+    f.write_text("hello")
+    hook = Path(__file__).resolve().parents[1] / "hooks" / "gchat-footer.py"
+    ev = {"tool_name": "mcp__gchat-local__send_file",
+          "tool_input": {"path": str(f), "conversation_id": "AAA", "expect_sha256": "caller-supplied-nonsense"}}
+    out = json.loads(subprocess.run([sys.executable, str(hook)], input=json.dumps(ev), capture_output=True, text=True, check=True).stdout)
+    approved = out["hookSpecificOutput"]["updatedInput"]
+    assert approved["expect_sha256"] == hashlib.sha256(b"hello").hexdigest()  # the hook overrides the caller's value
+    assert "sha256 2cf24dba5fb0a30e" in out["hookSpecificOutput"]["permissionDecisionReason"]
+    monkeypatch.setattr(chat, "upload", lambda space, name, mime, fh, size: {"attachmentUploadToken": "t"})
+    server.send_file(**{k: v for k, v in approved.items()})
+    f.write_text("HELLO")  # changed after approval
+    with pytest.raises(ValueError, match="approved"):
+        server.send_file(**approved)
