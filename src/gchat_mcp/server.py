@@ -838,7 +838,8 @@ def _sweep_threads_unread(me: str, space: str, target: datetime, skip: set[str])
     try:
         msgs, more = chat.messages(space, readstate.just_before(target), "", MAX_PER_SPACE)
         found = list(dict.fromkeys(m["thread"]["name"] for m in msgs
-                                   if m.get("threadReply") and m.get("thread", {}).get("name")))
+                                   if m.get("threadReply") and m.get("thread", {}).get("name")
+                                   and fmt.parse_ts(m["createTime"]) >= target))  # the query bound is 1 ms early
     except Exception as e:  # noqa: BLE001
         return [f"Could not check its threads for replies after that time ({e}); thread replies may still show read."]
     todo = [t for t in found if t not in skip]
