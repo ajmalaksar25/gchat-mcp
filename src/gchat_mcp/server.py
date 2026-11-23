@@ -408,6 +408,7 @@ def _mentions(space: str, text: str) -> tuple[str, list[str]]:
     A name is matched against every member of the space (all pages) and must match exactly one; a directory hit
     alone proves nothing. An email is matched exactly in the directory, else among the members.
     """
+    text = mentions.normalize(text)
     queries = mentions.extract(text)
     if not queries:
         return text, []
@@ -415,6 +416,11 @@ def _mentions(space: str, text: str) -> tuple[str, list[str]]:
     scan, resolved = None, {}
     for q in queries:
         first = None
+        if mentions.is_all(q):
+            if chat.get(space, "spaces.get").get("spaceType") == "DIRECT_MESSAGE":
+                raise mentions.MentionError("@all only works in a space or group chat, not a DM.")
+            resolved[q] = mentions.ALL
+            continue
         if "@" in q:
             try:
                 resolved[q] = mentions.resolve(q, chat.directory_search(q), members)
@@ -459,7 +465,7 @@ def _render_sent(m: dict, space: str, want: list[str]) -> str:
            f"Sender: {chat.who(s)} ({s.get('type', 'unknown type')}, {'me' if fmt.uid(s) == chat.me_id() else 'NOT me'}); {seen}.")
     if want:
         gone = mentions.missing(m, want)
-        out += (f"\nMentions confirmed: {', '.join(chat.who(u) for u in want)}." if not gone else
+        out += (f"\nMentions confirmed: {', '.join('everyone (@all)' if u == mentions.ALL else chat.who(u) for u in want)}." if not gone else
                 f"\nWARNING: the read-back has no mention annotation for {', '.join(gone)}: check the message in Chat.")
     return out
 
@@ -474,7 +480,8 @@ def send_message(conversation_id: str, messageText: str, thread_id: str = "") ->
     conversation_id: `spaces/XXXX` or bare id, from find_conversations. messageText: Chat-formatted text
     (*bold*, _italic_, lists kept as written). To @mention someone write `@[email or full name]`: it is
     resolved to a member of this space (fails, sending nothing, if nobody matches, several members match, or
-    the person is not in the space) and checked in the read-back. thread_id: reply in that thread (id or
+    the person is not in the space) and checked in the read-back. `@all` (or `@[all]`, `@[everyone]`) mentions
+    everyone in a space or group chat (refused in a DM); use it only when the user asked to notify everyone. thread_id: reply in that thread (id or
     `spaces/X/threads/Y`, same space only; named spaces only, since DMs and group chats have no threads; refused
     if the thread has no messages, never turned into a new post); blank starts a new thread. Reads the message back and reports its
     sender type and visibility, so a send that went out as an app or as private shows at once.
