@@ -1,6 +1,8 @@
 """Google Chat / People REST client: retries, paginated lists, name and label resolution."""
+import hashlib
 import io
 import json
+import threading
 import time
 import uuid
 
@@ -10,10 +12,25 @@ from google.auth.transport.requests import AuthorizedSession
 from . import auth, fmt
 
 CHAT = "https://chat.googleapis.com/v1"
-_session = None
-_me: dict | None = None
+_sessions: dict[str, AuthorizedSession] = {}
+_identities: dict[str, dict] = {}
+_lock = threading.Lock()
 _people: dict[str, dict] = {}
 _labels: dict[str, str] = {}
+
+
+def _session_for() -> tuple[AuthorizedSession, str]:
+    """(session, grant key) for whoever `auth.credentials()` says is calling now.
+
+    Sessions and identities are cached per grant (hash of client id + refresh token), never process-wide, so a
+    different caller's credentials get their own session and their own `me`.
+    """
+    with _lock:
+        creds = auth.credentials()
+        key = hashlib.sha256(f"{creds.client_id}\0{creds.refresh_token or creds.token}".encode()).hexdigest()
+        if key not in _sessions:
+            _sessions[key] = AuthorizedSession(creds)
+        return _sessions[key], key
 
 
 class ApiError(RuntimeError):
@@ -37,14 +54,12 @@ def _send(path: str, call: str, params: dict | None = None, stream: bool = False
     Method defaults to POST when a body is given, else GET. POST retries are safe only with an idempotency
     key such as messages.create `requestId`; pass retry=False for non-idempotent bodies (uploads).
     """
-    global _session
-    if _session is None:
-        _session = AuthorizedSession(auth.credentials())
+    session, _ = _session_for()
     url = path if path.startswith("http") else f"{CHAT}/{path}"
     method = method or ("POST" if json is not None or data is not None else "GET")
     for attempt in range(4):
         try:
-            r = _session.request(method, url, params=params, json=json, data=data, headers=headers,
+            r = session.request(method, url, params=params, json=json, data=data, headers=headers,
                                  timeout=timeout, stream=stream)
         except requests.RequestException as e:
             raise ApiError(call, "network error", str(e)) from e
@@ -117,10 +132,15 @@ def upload(space: str, filename: str, mimetype: str, file, size: int) -> dict:
     return r.json()["attachmentDataRef"]
 
 
+def reactions_page(msg_name: str, user: str = "", cap: int = 25) -> tuple[list[dict], bool]:
+    """Reactions on one message (each has its resource `name`), optionally only those by `user` (`users/{id}`);
+    second value says more existed beyond `cap`."""
+    params = {"pageSize": min(cap, 200), **({"filter": f'user.name = "{user}"'} if user else {})}
+    return paginate(f"{msg_name}/reactions", "reactions", "reactions.list", params, cap)
+
+
 def reactions(msg_name: str, user: str = "", cap: int = 25) -> list[dict]:
-    """Reactions on one message (each has its resource `name`), optionally only those by `user` (`users/{id}`)."""
-    params = {"pageSize": cap, **({"filter": f'user.name = "{user}"'} if user else {})}
-    return paginate(f"{msg_name}/reactions", "reactions", "reactions.list", params, cap)[0]
+    return reactions_page(msg_name, user, cap)[0]
 
 
 def download(resource: str, cap: int) -> bytes:
@@ -143,15 +163,15 @@ def paginate(path: str, key: str, call: str, params: dict, cap: int) -> tuple[li
         out += d.get(key, [])
         token = d.get("nextPageToken")
         if not token:
-            return out, False
+            return out[:cap], len(out) > cap
     return out[:cap], bool(token) or len(out) > cap
 
 
 def _userinfo() -> dict:
-    global _me
-    if not _me:
-        _me = get("https://www.googleapis.com/oauth2/v2/userinfo", "userinfo")
-    return _me
+    _, key = _session_for()
+    if key not in _identities:
+        _identities[key] = get("https://www.googleapis.com/oauth2/v2/userinfo", "userinfo")
+    return _identities[key]
 
 
 def me_id() -> str:
@@ -177,6 +197,16 @@ def person(user) -> dict:
             except ApiError:
                 pass
         _people[i] = info
+    return _people[i]
+
+
+def person_strict(user) -> dict:
+    """Like `person`, but ApiError when the profile cannot be read (never a silent 'Unknown')."""
+    i = fmt.uid(user)
+    if i not in _people or _people[i]["name"] == "Unknown":
+        p = get(f"https://people.googleapis.com/v1/people/{i}", "people.get", {"personFields": "names,emailAddresses"})
+        email = next((e["value"] for e in p.get("emailAddresses", [])), "")
+        _people[i] = {"name": next((n["displayName"] for n in p.get("names", [])), email or "Unknown"), "email": email}
     return _people[i]
 
 
@@ -219,8 +249,10 @@ def spaces() -> tuple[list[dict], bool]:
 
 
 def member_ids(space: str, cap: int = 1000) -> set[str]:
-    """User ids (human members) of a space."""
-    ms, _ = paginate(f"{space}/members", "memberships", "spaces.members.list", {"pageSize": 100}, cap)
+    """User ids (human members) of a space, read through every page; ApiError if there are more than `cap`."""
+    ms, more = paginate(f"{space}/members", "memberships", "spaces.members.list", {"pageSize": 100}, cap)
+    if more:
+        raise ApiError("spaces.members.list", "too many", f"more than {cap} members: cannot list them all")
     return {fmt.uid(m.get("member")) for m in ms if m.get("member", {}).get("type") != "BOT"} - {""}
 
 

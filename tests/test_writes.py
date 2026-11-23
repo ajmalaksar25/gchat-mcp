@@ -51,7 +51,7 @@ class Fake:
             return self.msgs[path]
         if call == "spaces.get":
             return {"name": path, "displayName": "Team", "spaceType": "SPACE", "spaceThreadingState": self.threading}
-        if call == "users.spaces.getSpaceReadState":
+        if call == "users.spaces.getReadState":
             return {"lastReadTime": self.read.get(path, "")}
         if call == "spaces.findDirectMessage":
             raise chat.ApiError(call, 404, "none")
@@ -73,6 +73,8 @@ def fake(monkeypatch):
     monkeypatch.setattr(chat, "who", lambda u: PEOPLE.get(chat.fmt.uid(u), ("Unknown",))[0] if not (isinstance(u, dict) and u.get("displayName")) else u["displayName"])
     monkeypatch.setattr(chat, "label", lambda s: s.get("displayName", "x"))
     monkeypatch.setattr(chat, "person", lambda u: dict(zip(("name", "email"), PEOPLE.get(chat.fmt.uid(u), ("Unknown", "")))))
+    monkeypatch.setattr(chat, "messages", lambda space, since="", thread="", cap=500: ([{"name": "m"}] if thread else [], False))
+    monkeypatch.setattr(chat, "person_strict", chat.person)
     monkeypatch.setattr(chat, "member_ids", lambda space, cap=1000: set(f.members))
     monkeypatch.setattr(chat, "directory_search", lambda q, cap=20: [
         {"id": i, "name": n, "emails": [e]} for i, (n, e) in PEOPLE.items()])
@@ -122,27 +124,18 @@ def test_scope_403_on_send_has_the_login_hint(fake, monkeypatch):
 
 
 # --- send_file
-def test_send_file_uploads_then_attaches_and_reads_back(fake, tmp_path, monkeypatch):
-    f = tmp_path / "report.txt"
-    f.write_text("hello")
-    seen = {}
-
-    def upload(space, filename, mimetype, fh, size):
-        seen.update(space=space, filename=filename, mimetype=mimetype, data=fh.read(), size=size)
-        return {"attachmentUploadToken": "tok"}
-    monkeypatch.setattr(chat, "upload", upload)
-    out = server.send_file("AAA", str(f), "see @[priya@x.com]")
-    assert seen == {"space": SP, "filename": "report.txt", "mimetype": "text/plain", "data": b"hello", "size": 5}
-    body = fake.calls[0][3]
-    assert body["attachment"] == [{"attachmentDataRef": {"attachmentUploadToken": "tok"}}]
-    assert body["text"] == "see <users/222>"
-    assert "r.txt (text/plain)" in out and "5 bytes" in out and "Mentions confirmed" in out
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    h = tmp_path / "home"
+    h.mkdir()
+    monkeypatch.setenv("HOME", str(h))
+    return h
 
 
 @pytest.mark.parametrize("make", ["missing", "empty", "env", "dir"])
-def test_send_file_refuses_before_any_call(fake, tmp_path, monkeypatch, make):
+def test_send_file_refuses_before_any_call(fake, home, monkeypatch, make):
     monkeypatch.setattr(chat, "upload", lambda *a: pytest.fail("uploaded"))
-    p = {"missing": tmp_path / "nope.txt", "empty": tmp_path / "e.txt", "env": tmp_path / ".env.prod", "dir": tmp_path}[make]
+    p = {"missing": home / "nope.txt", "empty": home / "e.txt", "env": home / ".env.prod", "dir": home}[make]
     if make in ("empty", "env"):
         p.write_text("" if make == "empty" else "SECRET=1")
     with pytest.raises(ValueError):
@@ -150,20 +143,149 @@ def test_send_file_refuses_before_any_call(fake, tmp_path, monkeypatch, make):
     assert fake.calls == []
 
 
-def test_send_file_refuses_the_token_file(fake, tmp_path, monkeypatch):
-    monkeypatch.setattr(auth, "DIR", tmp_path)
-    monkeypatch.setattr(server, "BLOCKED_DIRS", [tmp_path])
-    (tmp_path / "token.json").write_text("{}")
-    with pytest.raises(ValueError, match="credentials"):
-        server.send_file("AAA", str(tmp_path / "token.json"))
-
-
-def test_send_file_over_200mb_is_refused(fake, tmp_path, monkeypatch):
-    f = tmp_path / "big.bin"
-    f.write_bytes(b"x")
-    monkeypatch.setattr(server, "UPLOAD_CAP", 0)
-    with pytest.raises(ValueError, match="200 MB"):
+@pytest.mark.parametrize("rel", [".config/gchat-mcp/token.json", ".ssh/anything", ".aws/credentials", ".kube/config",
+                                 ".docker/config.json", ".netrc", "docs/server.pem", "docs/my.key", "docs/id_rsa",
+                                 "docs/token_old.json", "docs/credentials-prod.json", "docs/client_secret_1.json",
+                                 "Library/Keychains/login.keychain-db", ".config/anything.txt",
+                                 "Library/Application Support/Google/Chrome/Default/Cookies"])
+def test_send_file_denylist(fake, home, monkeypatch, rel):
+    monkeypatch.setattr(chat, "upload", lambda *a: pytest.fail("uploaded"))
+    f = home / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("x")
+    with pytest.raises(ValueError, match="Refusing"):
         server.send_file("AAA", str(f))
+    assert fake.calls == []
+
+
+def test_send_file_refuses_a_symlink_final_component(fake, home, monkeypatch):
+    monkeypatch.setattr(chat, "upload", lambda *a: pytest.fail("uploaded"))
+    (home / "ok.txt").write_text("fine")
+    (home / "link.txt").symlink_to(home / "ok.txt")  # harmless target: still refused, a swap is the danger
+    with pytest.raises(ValueError, match="symbolic link"):
+        server.send_file("AAA", str(home / "link.txt"))
+
+
+def test_send_file_checks_the_real_path_of_the_opened_file(fake, home, monkeypatch):
+    monkeypatch.setattr(chat, "upload", lambda *a: pytest.fail("uploaded"))
+    (home / ".ssh").mkdir()
+    (home / ".ssh" / "notes.txt").write_text("x")
+    (home / "pub").symlink_to(home / ".ssh")  # directory symlink in the middle of the path
+    with pytest.raises(ValueError, match="inside ~/.ssh"):
+        server.send_file("AAA", str(home / "pub" / "notes.txt"))
+    with pytest.raises(ValueError, match="inside ~/.ssh"):
+        server.send_file("AAA", str(home / "pub" / ".." / ".ssh" / "notes.txt"))
+
+
+def test_send_file_uploads_the_opened_descriptor(fake, home, monkeypatch):
+    f = home / "report.txt"
+    f.write_text("hello")
+    seen = {}
+
+    def upload(space, filename, mimetype, fh, size):
+        seen.update(filename=filename, data=fh.read(), size=size)
+        return {"attachmentUploadToken": "tok"}
+    monkeypatch.setattr(chat, "upload", upload)
+    out = server.send_file("AAA", str(f), "see @[priya@x.com]")
+    assert seen == {"filename": "report.txt", "data": b"hello", "size": 5}
+    assert fake.calls[0][3]["attachment"] == [{"attachmentDataRef": {"attachmentUploadToken": "tok"}}]
+    assert "r.txt (text/plain)" in out and "5 bytes" in out
+
+
+def test_send_file_over_200mb_is_refused(fake, home, monkeypatch):
+    f = home / "big.bin"
+    f.write_bytes(b"xx")
+    monkeypatch.setattr(server, "UPLOAD_CAP", 1)
+    with pytest.raises(ValueError, match="Chat accepts"):
+        server.send_file("AAA", str(f))
+
+
+# --- edit verification is separate for text and mentions; accepted writes are never raised away
+def _after_patch(fake, **changes):
+    real = fake.patch
+
+    def patch(path, call, params, body):
+        real(path, call, params, body)
+        fake.msgs[path].update(changes)
+        return {}
+    chat.patch = patch
+
+
+def test_edit_whose_read_back_fails_says_it_was_accepted(fake, monkeypatch):
+    real_get = fake.get
+    state = {"patched": False}
+    real_patch = fake.patch
+
+    def patch(*a):
+        state["patched"] = True
+        return real_patch(*a)
+
+    def get(path, call, params=None):
+        if state["patched"] and call == "messages.get":
+            raise chat.ApiError("messages.get", 503, "down")
+        return real_get(path, call, params)
+    monkeypatch.setattr(chat, "patch", patch)
+    monkeypatch.setattr(chat, "get", get)
+    out = server.edit_message(f"{SP}/messages/mine", "new words")
+    assert "could not verify" in out and "WAS accepted" in out and "do not" in out
+
+
+def test_edit_text_mismatch_is_not_reported_as_verified(fake):
+    _after_patch(fake, text="something else")
+    out = server.edit_message(f"{SP}/messages/mine", "new words")
+    assert "could not verify" in out and "text in the read-back differs" in out and "WAS accepted" in out
+
+
+def test_edit_mention_annotation_missing_is_reported_separately(fake):
+    _after_patch(fake, annotations=[], formattedText="hi <users/222>")
+    out = server.edit_message(f"{SP}/messages/mine", "hi @[priya@x.com]")
+    assert "could not verify" in out and "no mention annotation for Priya Shah" in out
+    assert "text in the read-back differs" not in out  # formattedText carries the mention markup
+
+
+def test_edit_with_mention_verifies_text_and_annotation(fake):
+    _after_patch(fake, text="hi @Priya Shah", formattedText="hi <users/222>",
+                 annotations=[{"type": "USER_MENTION", "userMention": {"user": {"name": "users/222"}}}])
+    out = server.edit_message(f"{SP}/messages/mine", "hi @[priya@x.com]")
+    assert "text verified, mentions confirmed: Priya Shah" in out
+
+
+def test_send_whose_read_back_fails_says_it_was_posted(fake, monkeypatch):
+    real_get = fake.get
+    state = {"sent": False}
+    real_post = fake.post
+
+    def post(*a):
+        state["sent"] = True
+        return real_post(*a)
+
+    def get(path, call, params=None):
+        if state["sent"] and call == "messages.get":
+            raise chat.ApiError("messages.get", 503, "down")
+        return real_get(path, call, params)
+    monkeypatch.setattr(chat, "post", post)
+    monkeypatch.setattr(chat, "get", get)
+    out = server.send_message("AAA", "hello")
+    assert "could not read it back" in out and "do not send it again" in out
+
+
+# --- start_conversation: an existing space returned by setup is "opened", not "created"
+def test_setup_returning_an_older_space_is_reported_as_opened(fake, monkeypatch):
+    real = fake.post
+
+    def post(path, call, params, body):
+        sp = real(path, call, params, body)
+        return {**sp, "createTime": "2020-01-01T00:00:00Z"}
+    monkeypatch.setattr(chat, "post", post)
+    out = server.start_conversation(["priya@x.com"])
+    assert out.startswith("Opened the existing") and "Created" not in out
+
+
+def test_new_space_is_reported_as_created(fake, monkeypatch):
+    real = fake.post
+    monkeypatch.setattr(chat, "post", lambda path, call, params, body: {
+        **real(path, call, params, body), "createTime": server.datetime.now(server.timezone.utc).isoformat()})
+    assert server.start_conversation([], "Solo").startswith("Created")
 
 
 # --- edit / delete
@@ -171,7 +293,7 @@ def test_edit_my_message_patches_text_and_reads_back(fake):
     out = server.edit_message(f"{SP}/messages/mine", "new words")
     assert fake.calls[0][:3] == ("PATCH", f"{SP}/messages/mine", "messages.patch")
     assert fake.calls[0][3:] == ({"text": "new words"}, {"updateMask": "text"})
-    assert "read-back text matches" in out
+    assert "text verified" in out
 
 
 def test_edit_and_delete_refuse_someone_elses_message(fake):
@@ -250,7 +372,7 @@ def test_read_state_scope_403_has_the_login_hint(fake, monkeypatch):
 def test_one_email_finds_dm_first_then_creates(fake):
     out = server.start_conversation(["Priya@X.com"])
     assert fake.calls[0][:3] == ("POST", "spaces:setup", "spaces.setup")
-    assert fake.calls[0][3]["space"] == {"spaceType": "DIRECT_MESSAGE"}
+    assert fake.calls[0][3]["space"] == {"spaceType": "DIRECT_MESSAGE", "singleUserBotDm": False}
     assert fake.calls[0][3]["memberships"] == [{"member": {"name": "users/priya@x.com", "type": "HUMAN"}}]
     assert "Created `spaces/NEW`" in out and "https://chat.google.com/room/NEW" in out
 
@@ -260,7 +382,7 @@ def test_existing_dm_is_returned_not_duplicated(fake, monkeypatch):
     monkeypatch.setattr(chat, "get", lambda p, c, params=None: {"name": "spaces/DM1", "spaceType": "DIRECT_MESSAGE"}
                         if c == "spaces.findDirectMessage" else real(p, c, params))
     out = server.start_conversation(["priya@x.com"])
-    assert fake.calls == [] and "Found the existing DM `spaces/DM1`" in out
+    assert fake.calls == [] and "Opened the existing `spaces/DM1`" in out and "Created" not in out
 
 
 def test_name_or_several_emails_make_a_space_or_group(fake):
