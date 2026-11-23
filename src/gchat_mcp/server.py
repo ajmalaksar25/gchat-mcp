@@ -39,6 +39,8 @@ def tool(fn):
 
 
 MAX_SPACES, MAX_PER_SPACE, OUT_CAP = 60, 500, 40000
+THREAD_SWEEP_CAP = 30  # threads whose marker mark_unread moves in one call
+THREAD_STATE_CAP = 10  # getThreadReadState calls per space in one `unread` call
 REACTOR_CAP, REACTOR_MSGS = 6, 40  # name reactors only on lightly reacted messages, at most 40 lookups per call
 ATTACH_CAP, INLINE_IMAGE_CAP = 25 << 20, 3_750_000  # inline cap keeps base64 under the 5 MB image limit
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -221,10 +223,13 @@ def search_messages(keywords: list[str], since: str = "", conversation_id: str =
 
 @tool
 def unread(since: str = "") -> str:
-    """List unread messages (newer than my read marker, not sent by me) in conversations active since `since`.
+    """List unread messages (not sent by me) in conversations active since `since`, as Chat shows them.
 
     since: ISO-8601 (naive = Asia/Kolkata), default 3 days ago. Never looks back past `since`; scans at most
     60 spaces x 500 messages. Grouped by conversation with counts, messages expanded like read_conversation.
+    Top-level messages are unread when newer than the space read marker; replies inside a thread are unread
+    when newer than that thread's own marker (Chat keeps one per thread). Thread markers are read for at most
+    10 threads per space (those with the newest replies); the others are judged by the space marker, with a note.
     """
     me = chat.me_id()
     since_dt = _since(since, 3)
@@ -232,18 +237,41 @@ def unread(since: str = "") -> str:
 
     def one(s):
         rs = chat.get(f"users/me/{s['name']}/spaceReadState", "users.spaces.getSpaceReadState")
-        cut = max(rs.get("lastReadTime", ""), fmt.rfc3339(since_dt))
-        msgs, more = chat.messages(s["name"], cut, "", MAX_PER_SPACE)
-        return [m for m in msgs[::-1] if fmt.uid(m.get("sender", {})) != me], more
+        space_cut = max(fmt.parse_ts(rs["lastReadTime"]) if rs.get("lastReadTime") else since_dt, since_dt)
+        msgs, more = chat.messages(s["name"], fmt.rfc3339(since_dt), "", MAX_PER_SPACE)
+        theirs = [m for m in msgs if fmt.uid(m.get("sender", {})) != me]
+        out = [m for m in theirs if not m.get("threadReply") and fmt.parse_ts(m["createTime"]) > space_cut]
+        replies = [m for m in theirs if m.get("threadReply") and m.get("thread", {}).get("name")]
+        names = list(dict.fromkeys(m["thread"]["name"] for m in replies))  # newest activity first
+        cut_of, bad = {}, ""
+        for t in names[:THREAD_STATE_CAP]:
+            try:
+                tm = chat.get(f"users/me/{t}/threadReadState", "users.spaces.threads.getThreadReadState").get("lastReadTime", "")
+            except chat.ApiError as e:
+                bad = f"HTTP {e.status}"
+                break
+            cut_of[t] = max(fmt.parse_ts(tm), since_dt) if tm else space_cut
+        out += [m for m in replies if fmt.parse_ts(m["createTime"]) > cut_of.get(m["thread"]["name"], space_cut)]
+        out.sort(key=lambda m: fmt.parse_ts(m["createTime"]))
+        label, extra = chat.label(s), []
+        if more:
+            extra.append(f"{label}: more than {MAX_PER_SPACE} messages since {fmt.rfc3339(since_dt)}; showing the newest, "
+                         "so older unread messages may be missing.")
+        if bad:
+            extra.append(f"{label}: could not read thread read state ({bad}); replies are judged by the space marker.")
+        elif len(names) > THREAD_STATE_CAP:
+            extra.append(f"{label}: thread read state checked for {THREAD_STATE_CAP} of {len(names)} threads with replies; "
+                         "the others are judged by the space marker.")
+        return out, extra
 
     res = list(_fan(one, sp))
     out = []
     for s, r, e in res:
-        if e or not r[0]:
+        if e:
             continue
-        if r[1]:
-            notes.append(f"{chat.label(s)}: more than {MAX_PER_SPACE} unread; showing the newest.")
-        out.append(f"## {chat.label(s)} (`{s['name']}`): {len(r[0])} unread\n" + _thread_blocks(r[0], me))
+        notes += r[1]
+        if r[0]:
+            out.append(f"## {chat.label(s)} (`{s['name']}`): {len(r[0])} unread\n" + _thread_blocks(r[0], me))
     notes += _errors(res, "could not read")
     return _finish(out or ["Nothing unread."], notes)
 
@@ -562,7 +590,7 @@ def edit_message(message_id: str, new_text: str, conversation_id: str = "") -> s
         return (f"Edited `{ref}`, but could not verify: the read-back failed ({e}). The edit WAS accepted: do not "
                 "repeat it; check in Chat.")
     problems = []
-    if not _text_matches(m, text, bool(want)):
+    if not _text_matches(m, text):
         problems.append("the text in the read-back differs from what was sent")
     gone = mentions.missing(m, want)
     if gone:
@@ -574,12 +602,13 @@ def edit_message(message_id: str, new_text: str, conversation_id: str = "") -> s
             "text verified" + (f", mentions confirmed: {', '.join(chat.who(u) for u in want)}." if want else "."))
 
 
-def _text_matches(m: dict, sent: str, has_mentions: bool) -> bool:
-    """Read-back text equals what was sent. With mentions, `text` shows @names, so compare `formattedText`."""
+def _text_matches(m: dict, sent: str) -> bool:
+    """Read-back equals what was sent. `text` is plain (markup removed, mentions shown as @names); `formattedText`
+    keeps the markup and `<users/ID>`, so it is compared too. Whitespace differences are ignored."""
     if m.get("text", "") == sent:
         return True
     norm = lambda t: " ".join(t.split())
-    return has_mentions and norm(m.get("formattedText", "")) == norm(sent)
+    return norm(sent) in (norm(m.get("formattedText", "")), norm(m.get("text", "")))
 
 
 @tool
@@ -759,8 +788,9 @@ def mark_unread(conversation_id: str, since: str = "", message_id: str = "", thr
     Asia/Kolkata) or message_id (short id or full name): that moment and everything after it shows unread.
     The marker only ever moves earlier, never later (that would mark messages read). Chat keeps a marker per
     space (top-level messages) and one per thread (replies): thread_id sets only that thread's marker (and
-    message_id, if also given, must be in that thread); for a message that is inside a thread of a threaded
-    space, that thread's marker is moved too. A single thread CAN be set unread
+    message_id, if also given, must be in that thread). Without thread_id the space marker moves AND the marker of
+    every thread with a reply at or after that moment (found from the newest 500 messages since then, at most
+    30 threads; the result lists each thread and says when it hit a cap). A single thread CAN be set unread
     (users.spaces.threads.updateThreadReadState). Local updates are serialised and the marker is re-read right
     before it is written, then read back and any difference reported; another Chat client (phone, web) can
     still move the marker at the same moment, because Chat has no compare-and-set.
@@ -781,19 +811,48 @@ def mark_unread(conversation_id: str, since: str = "", message_id: str = "", thr
         scopes.append(in_thread)
     me, out = chat.me_id(), []
     for t in scopes:
-        where = f"thread `{t}`" if t else f"`{space}`"
-        r = _move_marker(me, space, t, lambda cur: readstate.unread_from(target, cur))
-        if not r["wanted"]:
-            out.append(f"{where}: marker already earlier than that, left alone (it is unread from there).")
-        elif r["error"]:
-            out.append(f"{where}: marker set to {r['wanted']}, but could not verify ({r['error']}). "
-                       "This WAS accepted: do not repeat it.")
-        elif _same_time(r["after"], r["wanted"]):
-            out.append(f"{where}: marker moved to {r['after']} (just before {readstate.stamp(target)}).")
-        else:
-            out.append(f"{where}: asked for {r['wanted']} but Chat now reports {r['after'] or 'no marker'} "
-                       "(Chat adjusted it, or another client moved it): check in Chat.")
+        out.append(_unread_line(t, space, _move_marker(me, space, t, lambda cur: readstate.unread_from(target, cur)), target))
+    if not thread:  # the space marker covers top-level messages only: replies need their thread's marker
+        out += _sweep_threads_unread(me, space, target, skip=set(scopes))
     return "\n".join(out)
+
+
+def _unread_line(t: str, space: str, r: dict, target: datetime) -> str:
+    where = f"thread `{t}`" if t else f"`{space}`"
+    if not r["wanted"]:
+        return f"{where}: marker already earlier than that, left alone (it is unread from there)."
+    if r["error"]:
+        return f"{where}: marker set to {r['wanted']}, but could not verify ({r['error']}). This WAS accepted: do not repeat it."
+    if _same_time(r["after"], r["wanted"]):
+        return f"{where}: marker moved to {r['after']} (just before {readstate.stamp(target)})."
+    return (f"{where}: asked for {r['wanted']} but Chat now reports {r['after'] or 'no marker'} "
+            "(Chat adjusted it, or another client moved it): check in Chat.")
+
+
+def _sweep_threads_unread(me: str, space: str, target: datetime, skip: set[str]) -> list[str]:
+    """Move the marker of every thread that has a reply created at or after `target` (never later), one line each.
+
+    Replies are found from the messages since the cutoff (`threadReply` true); the scan is capped at
+    MAX_PER_SPACE messages and THREAD_SWEEP_CAP threads, and says so. The space marker is already written, so
+    failures here are reported, never raised."""
+    try:
+        msgs, more = chat.messages(space, readstate.just_before(target), "", MAX_PER_SPACE)
+        found = list(dict.fromkeys(m["thread"]["name"] for m in msgs
+                                   if m.get("threadReply") and m.get("thread", {}).get("name")))
+    except Exception as e:  # noqa: BLE001
+        return [f"Could not check its threads for replies after that time ({e}); thread replies may still show read."]
+    todo = [t for t in found if t not in skip]
+    lines = []
+    for t, r, e in _fan(lambda t: _move_marker(me, space, t, lambda cur: readstate.unread_from(target, cur)),
+                        todo[:THREAD_SWEEP_CAP]):
+        lines.append(_unread_line(t, space, r, target) if not e else f"thread `{t}`: could not move its marker ({e}).")
+    if len(todo) > THREAD_SWEEP_CAP:
+        lines.append(f"Moved {THREAD_SWEEP_CAP} of {len(todo)} threads with replies after that time (cap): "
+                     "the others may still show read.")
+    if more:
+        lines.append(f"Checked only the newest {MAX_PER_SPACE} messages after that time: older threads with replies "
+                     "may still show read.")
+    return lines
 
 
 def _emails(emails) -> list[str]:

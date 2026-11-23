@@ -33,3 +33,8 @@ def unread_from(target: datetime, current: str = "") -> str | None:
     if current and fmt.parse_ts(current) <= new:
         return None
     return stamp(new)
+
+
+def just_before(target: datetime) -> str:
+    """The `lastReadTime` that leaves a message created at `target` unread (same value `unread_from` writes)."""
+    return stamp(target.astimezone(timezone.utc) - GAP)
