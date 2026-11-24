@@ -396,10 +396,11 @@ def _thread_args(space: str, thread_id: str) -> tuple[dict, dict]:
     params, body = {"requestId": str(uuid.uuid4())}, {}  # requestId makes the create idempotent
     if thread_id:
         thread = _thread_name(space, thread_id)
-        kind = chat.get(space, "spaces.get").get("spaceType")
-        if kind != "SPACE":
-            raise ValueError(f"{space} is a {'DM' if kind == 'DIRECT_MESSAGE' else 'group chat'}, which has no threads: "
-                             "a message there goes to the conversation. Send without thread_id.")
+        # DMs and group chats accept thread replies too: the API chains the
+        # message under the target (the UI shows it as a quoted reply). The
+        # 2026-11-23 review wrongly refused them here; replying under a DM
+        # message had always worked and is wanted. REPLY_MESSAGE_OR_FAIL below
+        # still guarantees a bad thread never becomes a stray new post.
         if not chat.messages(space, "", thread, 1)[0]:  # before any upload: a stale thread must not become a new post
             raise ValueError(f"{thread} has no messages (deleted or wrong id): not posting.")
         body["thread"] = {"name": thread}
@@ -511,7 +512,7 @@ def send_message(conversation_id: str, messageText: str, thread_id: str = "") ->
     resolved to a member of this space (fails, sending nothing, if nobody matches, several members match, or
     the person is not in the space) and checked in the read-back. `@all` (or `@[all]`, `@[everyone]`) mentions
     everyone in a space or group chat (refused in a DM); use it only when the user asked to notify everyone. thread_id: reply in that thread (id or
-    `spaces/X/threads/Y`, same space only; named spaces only, since DMs and group chats have no threads; refused
+    `spaces/X/threads/Y`, same space only; in a DM or group chat the reply chains under that message; refused
     if the thread has no messages, never turned into a new post); blank starts a new thread. Reads the message back and reports its
     sender type and visibility, so a send that went out as an app or as private shows at once.
     """
