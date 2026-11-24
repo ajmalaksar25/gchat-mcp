@@ -223,17 +223,28 @@ def test_real_409_on_a_repeat_reaction_is_verified(srv):
 
 
 # ===== last review round =====
-# --- thread replies only in named spaces
-@pytest.mark.parametrize("kind,word", [("DIRECT_MESSAGE", "DM"), ("GROUP_CHAT", "group chat")])
-def test_explicit_thread_outside_a_named_space_is_refused_before_any_upload(srv, tmp_path, monkeypatch, kind, word):
+# --- thread replies chain in every space kind (the 2026-11-23 refusal for
+# DMs/group chats was wrong: the API accepts the thread and the UI chains the
+# reply under the target message; replying in DMs had always worked)
+@pytest.mark.parametrize("kind", ["DIRECT_MESSAGE", "GROUP_CHAT", "SPACE"])
+def test_explicit_thread_reply_chains_in_every_space_kind(srv, kind):
+    srv.space_type = kind
+    srv.threads.add(f"{SP}/threads/T1")
+    srv.messages[f"{SP}/messages/seed"] = {"name": f"{SP}/messages/seed", "thread": {"name": f"{SP}/threads/T1"}}
+    server.send_message("AAA", "hi", thread_id="T1")
+    create = next(x for x in srv.log if x[0] == "POST")
+    assert create[2]["messageReplyOption"] == "REPLY_MESSAGE_OR_FAIL"
+    assert create[3]["thread"] == {"name": f"{SP}/threads/T1"}
+
+
+@pytest.mark.parametrize("kind", ["DIRECT_MESSAGE", "SPACE"])
+def test_stale_thread_still_refused_everywhere_before_any_upload(srv, tmp_path, monkeypatch, kind):
     monkeypatch.setenv("HOME", str(tmp_path))
     (tmp_path / "a.txt").write_text("x")
     srv.space_type = kind
-    srv.threads.add(f"{SP}/threads/T1")
-    srv.messages[f"{SP}/messages/seed"] = {"name": "x", "thread": {"name": f"{SP}/threads/T1"}}
-    for call in (lambda: server.send_file("AAA", str(tmp_path / "a.txt"), thread_id="T1"),
-                 lambda: server.send_message("AAA", "hi", thread_id="T1")):
-        with pytest.raises(ValueError, match=f"{word}, which has no threads"):
+    for call in (lambda: server.send_file("AAA", str(tmp_path / "a.txt"), thread_id="TGONE"),
+                 lambda: server.send_message("AAA", "hi", thread_id="TGONE")):
+        with pytest.raises(ValueError, match="has no messages"):
             call()
     assert not any(x[0] == "POST" for x in srv.log)
 
