@@ -109,16 +109,30 @@ def prune(state: dict, now: datetime) -> None:
     state["reported"] = rep
 
 
+def _stamp_ok(v) -> bool:
+    try:
+        return isinstance(v, str) and datetime.fromisoformat(v).tzinfo is not None
+    except ValueError:
+        return False
+
+
 def _normalise(d) -> dict:
     out = empty()
     if not isinstance(d, dict):
         return out
     rep = d.get("reported")
     if isinstance(rep, dict):
-        out["reported"] = {str(k): str(v) for k, v in rep.items()}
+        out["reported"] = {str(k): v for k, v in rep.items() if _stamp_ok(v)}
     st = d.get("settings")
     if isinstance(st, dict):
-        out["settings"].update({k: st[k] for k in ("quiet_hours", "tz") if isinstance(st.get(k), str)})
+        if isinstance(st.get("tz"), str):
+            out["settings"]["tz"] = st["tz"]
+        if isinstance(st.get("quiet_hours"), str):
+            try:
+                parse_quiet(st["quiet_hours"])
+                out["settings"]["quiet_hours"] = st["quiet_hours"]
+            except ValueError:
+                pass  # a bad stored value means no quiet hours, never a broken watch
         if isinstance(st.get("spaces"), dict):
             out["settings"]["spaces"] = {str(k): v for k, v in st["spaces"].items() if v in SPACE_PREFS}
     return out
@@ -227,19 +241,25 @@ def default_root() -> Path:
 
 
 _store: Store | None = None
+_store_lock = threading.Lock()
 
 
 def store() -> Store:
     """The configured backend: $GCHAT_MCP_STATE = 'file' (default) or 'memory'."""
     global _store
-    if _store is None:
-        kind = os.environ.get("GCHAT_MCP_STATE", "file")
-        if kind == "memory":
-            _store = MemoryStore()
-        elif kind == "file":
-            _store = FileStore(default_root())
-        else:
-            raise ValueError(f"unknown GCHAT_MCP_STATE {kind!r} (file | memory)")
+    with _store_lock:
+        return _store or _make()
+
+
+def _make() -> Store:
+    global _store
+    kind = os.environ.get("GCHAT_MCP_STATE", "file")
+    if kind == "memory":
+        _store = MemoryStore()
+    elif kind == "file":
+        _store = FileStore(default_root())
+    else:
+        raise ValueError(f"unknown GCHAT_MCP_STATE {kind!r} (file | memory)")
     return _store
 
 
