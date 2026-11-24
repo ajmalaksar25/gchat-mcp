@@ -319,8 +319,10 @@ def _by_space(found: list) -> dict[str, list]:
 
 
 def _reply_candidates(since_dt: datetime, min_age_minutes: int, me: str,
-                      spaces: tuple[list[dict], list[str]] | None = None) -> tuple[list, list[str]]:
-    """(space, reason, context) triggers waiting for my reply, newest first, plus notes (see `needs_reply`)."""
+                      spaces: tuple[list[dict], list[str]] | None = None,
+                      young: list | None = None) -> tuple[list, list[str]]:
+    """(space, reason, context) triggers waiting for my reply, newest first, plus notes (see `needs_reply`).
+    Triggers skipped as newer than `min_age_minutes` add the moment they become old enough to `young`."""
     sp, notes = spaces or _active(since_dt)
     notes = list(notes)
     res = list(_fan(lambda s: chat.messages(s["name"], fmt.rfc3339(since_dt), "", MAX_PER_SPACE), sp))
@@ -335,6 +337,8 @@ def _reply_candidates(since_dt: datetime, min_age_minutes: int, me: str,
         for reason, ctx in fmt.reply_reasons(msgs[::-1], s.get("spaceType", ""), me):
             if fmt.parse_ts(ctx[-1]["createTime"]) <= newest_ok:
                 found.append((s, reason, ctx))
+            elif young is not None:
+                young.append(fmt.parse_ts(ctx[-1]["createTime"]) + timedelta(minutes=min_age_minutes))
     notes += _errors(res, "could not read")
     # A reaction of mine on the trigger message counts as my reply.
     reacted = [f for f in found if f[2][-1].get("emojiReactionSummaries")]
@@ -964,11 +968,12 @@ def _me_name(me: str) -> str:
     return chat.me_email() if n == "Unknown" else n
 
 
-def _scan(since_dt: datetime, min_age_minutes: int, spaces=None) -> tuple[str, str, list, list[str]]:
-    """(my id, my name, [(space, label, reason, context)] newest first, notes)."""
-    me = chat.me_id()
-    found, notes = _reply_candidates(since_dt, min_age_minutes, me, spaces)
-    return me, _me_name(me), [(s, chat.label(s), r, ctx) for s, r, ctx in found], notes
+def _scan(since_dt: datetime, min_age_minutes: int, spaces=None):
+    """(my id, my name, [(space, label, reason, context)] newest first, notes, when the first trigger skipped as
+    too new becomes old enough or None)."""
+    me, young = chat.me_id(), []
+    found, notes = _reply_candidates(since_dt, min_age_minutes, me, spaces, young)
+    return me, _me_name(me), [(s, chat.label(s), r, ctx) for s, r, ctx in found], notes, min(young, default=None)
 
 
 def _select(me: str, found: list, only_new: bool, watch: bool, now: datetime):
@@ -994,7 +999,7 @@ def _select(me: str, found: list, only_new: bool, watch: bool, now: datetime):
     # Names are looked up after the state lock is released.
     items = [triage.item(s, label, reason, ctx, chat.who, me, new, imp) for s, label, reason, ctx, new, imp in keep]
     if muted:
-        notes.append(f"{muted} waiting conversation(s) in muted spaces were skipped (inbox_settings).")
+        notes.append(f"{muted} waiting trigger(s) in muted conversations were skipped (inbox_settings).")
     if held:
         notes.append(f"Quiet hours: {held} item(s) held until {until:%H:%M %Z}; they will be reported after that.")
     return items, held, until, notes
@@ -1040,11 +1045,12 @@ async def _classify(ctx: Context, items: list, me_name: str) -> list[str]:
 
 
 async def _triage(ctx: Context, since: str, min_age_minutes: int, only_new: bool, watch: bool,
-                  spaces=None, keep=None) -> tuple[triage.Triage, str]:
+                  spaces=None, keep=None) -> tuple[triage.Triage, datetime | None]:
     """One triage pass. `keep(items)` decides, after classification, whether this pass returns its items
-    (inbox_wait); every returned or classified-and-dropped item is recorded as reported. Returns (result, me)."""
+    (inbox_wait); every returned or classified-and-dropped item is recorded as reported. Returns (result, when a
+    rescan could find more: quiet hours that held items end, or a too-new trigger becomes old enough)."""
     now = datetime.now(timezone.utc)
-    me, me_name, found, notes = await _blocking(_scan, _since(since, 3), min_age_minutes, spaces)
+    me, me_name, found, notes, due = await _blocking(_scan, _since(since, 3), min_age_minutes, spaces)
     items, held, until, more = await _blocking(_select, me, found, only_new, watch, now)
     notes += more
     by = "client"
@@ -1068,7 +1074,8 @@ async def _triage(ctx: Context, since: str, min_age_minutes: int, only_new: bool
     return triage.Triage(
         classified_by=by, items=items, counts=triage.counts(items), notes=notes,
         instructions=triage.client_instructions(me_name) if any(i.category is None for i in items) else None,
-        quiet_hours_until=until.isoformat() if until else None, held_for_quiet_hours=held), me
+        quiet_hours_until=until.isoformat() if held else None, held_for_quiet_hours=held), \
+        min([t for t in (until if held else None, due) if t], default=None)
 
 
 @mcp.tool()
@@ -1098,12 +1105,14 @@ async def inbox_wait(ctx: Context, timeout_seconds: int = 300, poll_seconds: int
     was active since the last look; sends progress while waiting. With MCP sampling it returns only when a new
     item is reply_needed (the other new items come along, or are recorded quietly when none is); without sampling
     it returns on any new candidate, for you to classify. Returns an empty result when the time runs out.
-    Quiet hours apply. Read-only on Chat; drafts are never sent.
+    Quiet hours apply; items they held, or triggers younger than min_age_minutes, are rescanned when due. Edits,
+    deletions and reactions do not mark a space active, so they wait for the next message. Read-only on Chat;
+    drafts are never sent.
     """
     total = max(0, min(timeout_seconds, WAIT_CAP))
     poll = max(POLL_MIN, poll_seconds)
     start = anyio.current_time()
-    last, result, scans = None, None, 0
+    last, result, scans, resume_at = None, None, 0, None
 
     def keep(items, by):
         return any(i.category == "reply_needed" for i in items) if by == "sampling" else bool(items)
@@ -1111,9 +1120,11 @@ async def inbox_wait(ctx: Context, timeout_seconds: int = 300, poll_seconds: int
     while True:
         spaces = await _blocking(_active, _since(since, 3))
         mark = max((s.get("lastActiveTime", "") for s in spaces[0]), default="")
-        if mark != last:
+        # Rescan on new activity, and once held items are due (quiet hours over, a trigger old enough).
+        due = resume_at is not None and datetime.now(timezone.utc) >= resume_at
+        if mark != last or due:
             last, scans = mark, scans + 1
-            result, _ = await _triage(ctx, since, min_age_minutes, True, True, spaces, keep)
+            result, resume_at = await _triage(ctx, since, min_age_minutes, True, True, spaces, keep)
             if result.items:
                 return result
         elapsed = anyio.current_time() - start
@@ -1130,11 +1141,11 @@ async def inbox_wait(ctx: Context, timeout_seconds: int = 300, poll_seconds: int
 @mcp.resource(INBOX_URI, name="needs-reply", mime_type="application/json",
               description="Conversations waiting on me (last 3 days), unclassified, with classification instructions. "
                           "Reading it records nothing.")
-def inbox_resource() -> str:
-    with chat.call():
-        now = datetime.now(timezone.utc)
-        me, me_name, found, notes = _scan(_since("", 3), 0)
-        items, _, _, more = _select(me, found, False, False, now)
+async def inbox_resource() -> str:
+    def read():
+        me, me_name, found, notes, _ = _scan(_since("", 3), 0)
+        return (me_name, notes) + _select(me, found, False, False, datetime.now(timezone.utc))
+    me_name, notes, items, _, _, more = await _blocking(read)
     items = triage.order(items)
     return triage.Triage(classified_by="client", items=items, counts=triage.counts(items), notes=notes + more,
                          instructions=triage.client_instructions(me_name) if items else None).model_dump_json(indent=1)

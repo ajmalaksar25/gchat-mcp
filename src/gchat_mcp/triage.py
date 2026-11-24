@@ -126,7 +126,9 @@ def payload(items: list[Item]) -> str:
              "sent": i.sent_at_local, "picked_because": i.trigger,
              "earlier": [{"from": "me" if c.is_me else c.sender, "text": c.text} for c in i.context],
              "message": i.message} for i in items]
-    return "<chat_data>\n" + json.dumps(rows, ensure_ascii=False, indent=1) + "\n</chat_data>"
+    # No literal "<" inside the data, so the text cannot close the fence and speak outside it.
+    data = json.dumps(rows, ensure_ascii=False, indent=1).replace("<", "\\u003c")
+    return "<chat_data>\n" + data + "\n</chat_data>"
 
 
 def rules(me: str) -> str:

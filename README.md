@@ -84,7 +84,9 @@ The cursor lives in the server, so a manual `inbox_triage` and the schedule neve
 4. Delivery: an event wakes that user's pending `inbox_wait` (no polling) and sends
    `notifications/resources/updated` for `gchat://inbox/needs-reply` to sessions that subscribed. Clients without
    either keep using the `only_new` cursor on a schedule.
-5. Classification: sampling where the client offers it, the client fallback otherwise; an optional server-side
+5. Per-user caches: `chat._labels` (DM / group-chat names, which leave out "me") is process-wide today and must
+   be keyed per user before one instance serves many; `_people` (names) is viewer-independent.
+6. Classification: sampling where the client offers it, the client fallback otherwise; an optional server-side
    model (per-tenant key) for push-only alerts, behind the same `parse_answer` validation.
 Sources: developers.google.com/workspace/events/guides (endpoints, lifetimes), .../guides/events-chat (targets,
 event types), .../guides/auth (scopes).
