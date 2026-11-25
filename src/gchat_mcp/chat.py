@@ -77,7 +77,7 @@ class ApiError(RuntimeError):
 
 def _send(path: str, call: str, params: dict | None = None, stream: bool = False,
           json: dict | None = None, method: str = "", data=None, headers: dict | None = None,
-          timeout: float = 30, retry: bool = True) -> requests.Response:
+          timeout: float | tuple = (5, 15), retry: bool = True) -> requests.Response:
     """Call a Chat (or other Google) path, retrying 429/5xx up to 3 times; raise ApiError otherwise.
 
     Method defaults to POST when a body is given, else GET. POST retries are safe only with an idempotency
@@ -91,6 +91,9 @@ def _send(path: str, call: str, params: dict | None = None, stream: bool = False
             r = session.request(method, url, params=params, json=json, data=data, headers=headers,
                                  timeout=timeout, stream=stream)
         except requests.RequestException as e:
+            if retry and method == "GET" and attempt < 2:  # a network blip: retry a read at once, not after a backoff
+                time.sleep(1)
+                continue
             raise ApiError(call, "network error", str(e)) from e
         if retry and r.status_code in (429, 500, 502, 503, 504) and attempt < 3:
             time.sleep(2 ** attempt)
