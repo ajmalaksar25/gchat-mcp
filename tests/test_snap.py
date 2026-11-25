@@ -1,6 +1,7 @@
 """SubQ Snap and the push watcher. Snap is checked against one recorded real call (tests/fixtures/
 snap_recording.json, made-up messages); the order and watcher tests replay that recorded response from a local
 HTTP listener, so the real `requests` path runs."""
+# ruff: noqa: F811  # imported pytest fixtures are used by parameter name
 import copy
 import io
 import json

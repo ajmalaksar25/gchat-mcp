@@ -6,6 +6,7 @@ import base64
 import contextvars
 import functools
 import mimetypes
+import os
 import re
 import sys
 import threading
@@ -23,6 +24,7 @@ from mcp.types import (CallToolResult, ClientCapabilities, ImageContent, ModelHi
                        SamplingCapability, SamplingMessage, TextContent)
 
 from . import auth, chat, fmt, mentions, readstate, safefile, snap, state, targets, triage
+from . import footer as footer_mod
 from . import emoji as emoji_mod
 
 mcp = FastMCP("gchat", instructions=(
@@ -505,16 +507,43 @@ def _create(space: str, body: dict, params: dict) -> str:
         return chat.post(f"{space}/messages", "messages.create", params, body)["name"]
 
 
-def _sent_report(name: str, space: str, want: list[str]) -> str:
+def _user_label() -> str:
+    """The signed-in user's display name for `{user}` in a footer; email when no profile name is readable."""
+    name = chat.who(f"users/{chat.me_id()}")
+    if name != "Unknown":
+        return name
+    return chat.me_email() or "me"
+
+
+def _footer() -> str:
+    """The effective footer template for this user: `$GCHAT_MCP_FOOTER` when present, else the stored setting."""
+    stored = ""
+    if footer_mod.ENV not in os.environ:
+        with state.store().transact(chat.me_id()) as st:
+            stored = st["settings"].get("footer", "")
+    template = footer_mod.configured(os.environ, stored)
+    return footer_mod.expand(template, _user_label()) if "{user}" in template else template
+
+
+def _with_footer(text: str) -> tuple[str, bool]:
+    return footer_mod.append(text, _footer())
+
+
+def _footer_note(added: bool) -> str:
+    return f"footer added: {'yes' if added else 'no'}"
+
+
+def _sent_report(name: str, space: str, want: list[str], footer_added: bool) -> str:
     m = chat.get(name, "messages.get")
-    return _render_sent(m, space, want)
+    return _render_sent(m, space, want, footer_added)
 
 
-def _render_sent(m: dict, space: str, want: list[str]) -> str:
+def _render_sent(m: dict, space: str, want: list[str], footer_added: bool) -> str:
     s = m.get("sender", {})
     seen = f"private, only {chat.who(m['privateMessageViewer'])} can see it" if m.get("privateMessageViewer") else "visible to the conversation"
     out = (f"Sent `{m['name']}` in thread `{m.get('thread', {}).get('name', '')}` to {chat.label(chat.get(space, 'spaces.get'))}.\n"
            f"Sender: {chat.who(s)} ({s.get('type', 'unknown type')}, {'me' if fmt.uid(s) == chat.me_id() else 'NOT me'}); {seen}.")
+    out += f"\n{_footer_note(footer_added)}."
     if want:
         gone = mentions.missing(m, want)
         out += (f"\nMentions confirmed: {', '.join('everyone (@all)' if u == mentions.ALL else chat.who(u) for u in want)}." if not gone else
@@ -536,15 +565,18 @@ def send_message(conversation_id: str, messageText: str, thread_id: str = "") ->
     everyone in a space or group chat (refused in a DM); use it only when the user asked to notify everyone. thread_id: reply in that thread (id or
     `spaces/X/threads/Y`, same space only; in a DM or group chat the reply chains under that message; refused
     if the thread has no messages, never turned into a new post); blank starts a new thread. Reads the message back and reports its
-    sender type and visibility, so a send that went out as an app or as private shows at once.
+    sender type and visibility, so a send that went out as an app or as private shows at once. A configured footer
+    (`inbox_settings` or `$GCHAT_MCP_FOOTER`) is appended once; the read-back says whether this call added it.
     """
     space = targets.space_id(conversation_id)
     if not messageText.strip():
         raise ValueError("messageText is empty.")
     params, body = _thread_args(space, thread_id)
     body["text"], want = _mentions(space, messageText)
+    body["text"], footer_added = _with_footer(body["text"])
     name = _create(space, body, params)
-    return _verified(f"Sent `{name}`", lambda: _sent_report(name, space, want))
+    return _verified(f"Sent `{name}` ({_footer_note(footer_added)})",
+                     lambda: _sent_report(name, space, want, footer_added))
 
 
 @tool
@@ -560,7 +592,8 @@ def send_file(conversation_id: str, path: str, text: str = "", thread_id: str = 
     uploaded.
 
     path: a local file, 1 byte to 200 MB (Chat also blocks some file types); the approval prompt shows its real
-    path. text: optional message that goes with it; `@[email or full name]` mentions work as in send_message.
+    path. text: optional message that goes with it; `@[email or full name]` mentions work as in send_message. A
+    configured footer is appended once to the caption, even when `text` is blank.
     thread_id as in send_message (checked before the upload). Reads the message back and reports the attachment
     name and type Chat shows plus the size uploaded (Chat does not return a size). Files with more than one
     hard link are refused. expect_stat / expect_sha256: set by the approval hook, never by the caller: the
@@ -570,6 +603,7 @@ def send_file(conversation_id: str, path: str, text: str = "", thread_id: str = 
     space = targets.space_id(conversation_id)
     params, body = _thread_args(space, thread_id)  # before the upload: a stale thread must not cost an upload
     body["text"], want = _mentions(space, text) if text.strip() else ("", [])
+    body["text"], footer_added = _with_footer(body["text"])
     f, real, size = safefile.open_checked(path, UPLOAD_CAP, expect_stat=expect_stat, expect_sha256=expect_sha256)
     with f, needs("messages"):
         mime = mimetypes.guess_type(real.name)[0] or "application/octet-stream"
@@ -579,10 +613,10 @@ def send_file(conversation_id: str, path: str, text: str = "", thread_id: str = 
     def report() -> str:
         m = chat.get(name, "messages.get")
         atts = [f"{a.get('contentName', '?')} ({a.get('contentType', '?')})" for a in m.get("attachment", [])]
-        return _render_sent(m, space, want) + "\n" + (
+        return _render_sent(m, space, want, footer_added) + "\n" + (
             f"Attachment in the read-back: {', '.join(atts)}; uploaded {real.name}, {size:,} bytes." if atts else
             f"WARNING: the read-back shows no attachment (uploaded {real.name}, {size:,} bytes): check the message in Chat.")
-    return _verified(f"Sent `{name}` with {real.name}", report)
+    return _verified(f"Sent `{name}` with {real.name} ({_footer_note(footer_added)})", report)
 
 
 def _own_message(ref: str) -> dict:
@@ -605,21 +639,22 @@ def edit_message(message_id: str, new_text: str, conversation_id: str = "") -> s
     message_id: full `spaces/X/messages/Y`, or the short id from read_conversation with conversation_id.
     new_text: the whole new text (replaces the old); `@[email or full name]` mentions work as in send_message.
     Uses messages.patch with updateMask `text`, then reads the message back and checks the text and the mention
-    annotations separately. If the edit was accepted but cannot be verified it says "could not verify": do not
-    repeat the edit in that case.
+    annotations separately. A configured footer is appended once. If the edit was accepted but cannot be verified
+    it says "could not verify": do not repeat the edit in that case.
     """
     ref = targets.message_ref(message_id, conversation_id)
     if not new_text.strip():
         raise ValueError("new_text is empty: use delete_message to remove a message.")
     _own_message(ref)
     text, want = _mentions(ref.split("/messages/")[0], new_text)
+    text, footer_added = _with_footer(text)
     with needs("messages"):
         chat.patch(ref, "messages.patch", {"updateMask": "text"}, {"text": text})
     try:
         m = chat.get(ref, "messages.get")
     except chat.ApiError as e:
-        return (f"Edited `{ref}`, but could not verify: the read-back failed ({e}). The edit WAS accepted: do not "
-                "repeat it; check in Chat.")
+        return (f"Edited `{ref}`, but could not verify: the read-back failed ({e}). The edit WAS accepted "
+                f"({_footer_note(footer_added)}): do not repeat it; check in Chat.")
     problems = []
     if not _text_matches(m, text):
         problems.append("the text in the read-back differs from what was sent")
@@ -627,10 +662,14 @@ def edit_message(message_id: str, new_text: str, conversation_id: str = "") -> s
     if gone:
         problems.append(f"no mention annotation for {', '.join(chat.who(u) for u in gone)}")
     if problems:
-        return (f"Edited `{ref}`, but could not verify: {'; '.join(problems)}. The edit WAS accepted: do not "
-                "repeat it; check in Chat.")
+        return (f"Edited `{ref}`, but could not verify: {'; '.join(problems)}. The edit WAS accepted "
+                f"({_footer_note(footer_added)}): do not repeat it; check in Chat.")
+    checks = ["text verified"]
+    if want:
+        checks.append(f"mentions confirmed: {', '.join(chat.who(u) for u in want)}")
+    checks.append(_footer_note(footer_added))
     return (f"Edited `{ref}` (last edited {fmt.fmt_time(m['lastUpdateTime']) if m.get('lastUpdateTime') else 'time not shown'}); "
-            "text verified" + (f", mentions confirmed: {', '.join(chat.who(u) for u in want)}." if want else "."))
+            + ", ".join(checks) + ".")
 
 
 def _text_matches(m: dict, sent: str) -> bool:
@@ -638,7 +677,8 @@ def _text_matches(m: dict, sent: str) -> bool:
     keeps the markup and `<users/ID>`, so it is compared too. Whitespace differences are ignored."""
     if m.get("text", "") == sent:
         return True
-    norm = lambda t: " ".join(t.split())
+    def norm(t: str) -> str:
+        return " ".join(t.split())
     return norm(sent) in (norm(m.get("formattedText", "")), norm(m.get("text", "")))
 
 
@@ -1176,14 +1216,16 @@ async def inbox_resource() -> str:
 @tool
 def inbox_settings(quiet_hours: str = "", timezone_name: str = "", mute: list[str] | None = None,
                    important: list[str] | None = None, normal: list[str] | None = None,
-                   forget_reported: bool = False) -> str:
-    """Show or change my inbox watch settings (stored per Google account by this server; nothing is sent to Chat).
+                   forget_reported: bool = False, footer: str | None = None) -> str:
+    """Show or change my per-account server settings (stored by this server; nothing is sent to Chat).
 
     quiet_hours: '22:00-08:00' (local to timezone_name) or 'off'; blank keeps it. During quiet hours watch calls
     (inbox_triage only_new, inbox_wait) hold items back, except from important spaces. timezone_name: IANA name
     such as 'Asia/Dubai'; blank keeps it (default Asia/Kolkata). mute / important / normal: conversation ids to
     skip entirely, to always let through and rank first, or to reset. forget_reported: clear the record of
-    reported triggers, so the next watch call reports everything again. Change these only when the user asks.
+    reported triggers, so the next watch call reports everything again. footer: text appended to sent/edited
+    messages and file captions ('{user}' becomes my display name); '' or 'off' disables it, omitting it keeps it.
+    `$GCHAT_MCP_FOOTER` overrides the stored footer. Change these only when the user asks.
     """
     me = chat.me_id()
     with state.store().transact(me) as st:
@@ -1203,13 +1245,20 @@ def inbox_settings(quiet_hours: str = "", timezone_name: str = "", mute: list[st
                     s["spaces"][_sid(i)] = pref
                 else:
                     s["spaces"].pop(_sid(i), None)
+        if footer is not None:
+            s["footer"] = footer_mod.clean(footer)
         if forget_reported:
             st["reported"] = {}
         out = dict(s, reported_triggers=len(st["reported"]))
     q = state.quiet_until(out, datetime.now(timezone.utc))
     prefs = "; ".join(f"{k} {v}" for k, v in sorted(out["spaces"].items())) or "none"
+    stored_footer = out.get("footer") or "off"
+    footer_line = f"Footer: {stored_footer}"
+    if footer_mod.ENV in os.environ:
+        effective = footer_mod.clean(os.environ[footer_mod.ENV]) or "off"
+        footer_line += f" (overridden by {footer_mod.ENV}: {effective})"
     return (f"Quiet hours: {out['quiet_hours'] or 'off'} ({out['tz']})" + (f", quiet now until {q:%H:%M}" if q else "")
-            + f"\nSpaces: {prefs}\nReported triggers remembered: {out['reported_triggers']}")
+            + f"\nSpaces: {prefs}\n{footer_line}\nReported triggers remembered: {out['reported_triggers']}")
 
 
 def main() -> None:

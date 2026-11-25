@@ -1,4 +1,7 @@
-from gchat_mcp import mentions
+import pytest
+
+from gchat_mcp import chat, mentions, server
+from tests.transport import ChatServer
 
 
 def test_bare_all_becomes_a_token():
@@ -36,10 +39,6 @@ def test_missing_accepts_the_live_shape_of_an_all_annotation():
 
 
 # --- @all must not list members (Devin review on PR #2): big spaces would be refused by member_ids
-import pytest
-
-from gchat_mcp import chat, server
-from tests.transport import ChatServer
 
 
 @pytest.fixture
