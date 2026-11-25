@@ -83,6 +83,17 @@ def test_footer_is_never_doubled(srv, monkeypatch):
     assert "footer added: no" in out
 
 
+
+
+def test_existing_footer_is_detected_before_mentions_are_resolved(srv, monkeypatch):
+    monkeypatch.setenv("GCHAT_MCP_FOOTER", "FYI @all")
+    out = server.send_message("AAA", "standup moved\n\nFYI @all")
+    text = created_text(srv)
+    assert text == "standup moved\n\nFYI <users/all>"
+    assert text.count("FYI") == 1
+    assert "footer added: no" in out
+
+
 def test_file_caption_gets_footer(srv, tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("GCHAT_MCP_FOOTER", FOOTER)
