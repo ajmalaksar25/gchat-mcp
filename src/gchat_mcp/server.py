@@ -22,7 +22,7 @@ from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import (CallToolResult, ClientCapabilities, ImageContent, ModelHint, ModelPreferences,
                        SamplingCapability, SamplingMessage, TextContent)
 
-from . import auth, chat, fmt, mentions, readstate, safefile, state, targets, triage
+from . import auth, chat, fmt, mentions, readstate, safefile, snap, state, targets, triage
 from . import emoji as emoji_mod
 
 mcp = FastMCP("gchat", instructions=(
@@ -78,15 +78,15 @@ def _fan(fn, items):
                 yield i, None, e
 
 
-def _active(since: datetime, only: str = "") -> tuple[list[dict], list[str]]:
-    """Spaces active since `since` (or just `only`), capped at MAX_SPACES; plus notes."""
+def _active(since: datetime, only: str = "", cap: int | None = MAX_SPACES) -> tuple[list[dict], list[str]]:
+    """Spaces active since `since` (or just `only`), the `cap` most recent (None: all); plus notes."""
     if only:
         return [chat.get(_sid(only), "spaces.get")], []
     sp, trunc = chat.spaces()
     cut = fmt.rfc3339(since)
     sp = [s for s in sp if s.get("lastActiveTime", cut) >= cut]
-    notes = [f"Only the {MAX_SPACES} most recently active of {len(sp)} spaces were checked."] if len(sp) > MAX_SPACES else []
-    return sp[:MAX_SPACES], notes + (["Space list was truncated at 3000."] if trunc else [])
+    notes = [f"Only the {cap} most recently active of {len(sp)} spaces were checked."] if cap and len(sp) > cap else []
+    return sp[:cap], notes + (["Space list was truncated at 3000."] if trunc else [])
 
 
 def _with_reactors(msgs: list[dict]) -> None:
@@ -1036,7 +1036,7 @@ async def _classify(ctx: Context, items: list, me_name: str) -> list[str]:
         except Exception as e:  # declined by the user, timed out, unparseable: these stay unclassified
             notes.append(f"sampling failed for {len(batch)} item(s): {type(e).__name__}: {str(e)[:160]}")
             continue
-        triage.apply(batch, verdicts)
+        triage.apply(batch, verdicts, "sampling")
         done += len(verdicts)
         notes += [f"sampling answer: {p}" for p in problems[:5]]
     if items and not done:
@@ -1044,38 +1044,65 @@ async def _classify(ctx: Context, items: list, me_name: str) -> list[str]:
     return notes
 
 
-async def _triage(ctx: Context, since: str, min_age_minutes: int, only_new: bool, watch: bool,
+async def _triage(ctx: Context | None, since: str, min_age_minutes: int, only_new: bool, watch: bool,
                   spaces=None, keep=None) -> tuple[triage.Triage, datetime | None]:
-    """One triage pass. `keep(items)` decides, after classification, whether this pass returns its items
-    (inbox_wait); every returned or classified-and-dropped item is recorded as reported. Returns (result, when a
-    rescan could find more: quiet hours that held items end, or a too-new trigger becomes old enough)."""
+    """One triage pass. Classifies by MCP sampling, then SubQ Snap, then leaves the rest to the client.
+    `keep(items)` picks, after classification, which items this pass returns (watch loops); returned items and
+    classified-but-dropped ones are recorded as reported. Returns (result, when a rescan could find more: quiet
+    hours that held items end, or a too-new trigger becomes old enough)."""
     now = datetime.now(timezone.utc)
     me, me_name, found, notes, due = await _blocking(_scan, _since(since, 3), min_age_minutes, spaces)
     items, held, until, more = await _blocking(_select, me, found, only_new, watch, now)
     notes += more
-    by = "client"
-    if items and _can_sample(ctx):
+    sampled = items and _can_sample(ctx)
+    if sampled:
         try:
             notes += await _classify(ctx, items, me_name)
-            by = "sampling" if all(i.category for i in items) else "client"
         except RuntimeError as e:
-            notes.append(f"MCP sampling was offered but failed ({str(e)[:200]}); returning items for the client "
-                         "to classify.")
-    elif items:
-        notes.append("This client does not offer MCP sampling (sampling/createMessage), so the server did not "
-                     "classify: the calling model classifies using `instructions`.")
-    record = [i.id for i in items]
-    if keep is not None and not keep(items, by):
-        items = []  # classified but not worth returning now: record so the next poll does not redo them
-        record = record if by == "sampling" else []
+            notes.append(f"MCP sampling was offered but failed ({str(e)[:200]}); the items go to SubQ Snap when it "
+                         "is set, else to the client.")
+    rest = [i for i in items if i.category is None]
+    if rest and snap.key():
+        notes += await anyio.to_thread.run_sync(snap.classify, rest, me_name)
+    if not sampled and any(i.category is None for i in items):
+        notes.append("This client does not offer MCP sampling (sampling/createMessage) and SubQ Snap did not "
+                     "classify every item, so the calling model classifies the rest using `instructions`.")
+    shown = items if keep is None else keep(items)
+    ids = {i.id for i in shown}
+    record = [i.id for i in items if i.id in ids or i.category]
     if record:
         await _blocking(_record, me, record, now)
-    items = triage.order(items)
+    shown = triage.order(shown)
     return triage.Triage(
-        classified_by=by, items=items, counts=triage.counts(items), notes=notes,
-        instructions=triage.client_instructions(me_name) if any(i.category is None for i in items) else None,
+        classified_by=triage.overall(shown), items=shown, counts=triage.counts(shown), notes=notes,
+        instructions=triage.client_instructions(me_name) if any(i.category is None for i in shown) else None,
         quiet_hours_until=until.isoformat() if held else None, held_for_quiet_hours=held), \
         min([t for t in (until if held else None, due) if t], default=None)
+
+
+class Watch:
+    """One watch loop's memory: each space's last activity seen, scans so far, when held items are due."""
+
+    def __init__(self):
+        self.seen: dict[str, str] = {}
+        self.scans = 0
+        self.resume_at: datetime | None = None
+
+
+async def poll(ctx: Context | None, w: Watch, since: str, min_age_minutes: int, keep) -> triage.Triage | None:
+    """One watch poll over every active space (no MAX_SPACES cap): read the space list and rescan only the spaces
+    active since the last look (all on the first look, and when held items are due). None when nothing moved."""
+    sp, notes = await _blocking(_active, _since(since, 3), "", None)
+    due = w.resume_at is not None and datetime.now(timezone.utc) >= w.resume_at
+    changed = sp if due or not w.seen else [s for s in sp if w.seen.get(s["name"]) != s.get("lastActiveTime")]
+    w.seen = {s["name"]: s.get("lastActiveTime", "") for s in sp}
+    if not changed:
+        return None
+    w.scans += 1
+    old = None if due else w.resume_at
+    result, new = await _triage(ctx, since, min_age_minutes, True, True, (changed, notes), keep)
+    w.resume_at = min([t for t in (old, new) if t], default=None)
+    return result
 
 
 @mcp.tool()
@@ -1085,8 +1112,9 @@ async def inbox_triage(ctx: Context, since: str = "", min_age_minutes: int = 0, 
 
     Candidates are the same as needs_reply (their message is last in a DM/group chat, an @-mention of me, or an
     answer in a thread I posted in; bots ignored; my reaction counts as a reply). A model judges the words, never
-    rules: the client's model via MCP sampling when the client offers it (classified_by="sampling"); otherwise the
-    items come back unclassified with `instructions`, and you classify them (classified_by="client").
+    rules: the client's model via MCP sampling when the client offers it; else SubQ Snap when the server has a key
+    (no drafts; an unsure answer is left unclassified); whatever is left comes back unclassified with
+    `instructions`, and you classify it. Each item's classified_by says which ("sampling", "snap", "client").
 
     since: ISO-8601 (naive = Asia/Kolkata), default 3 days ago. min_age_minutes: skip triggers newer than this.
     only_new: watch mode, the cursor: return only triggers never reported before, and hold items during quiet
@@ -1101,40 +1129,34 @@ async def inbox_triage(ctx: Context, since: str = "", min_age_minutes: int = 0, 
 async def inbox_wait(ctx: Context, timeout_seconds: int = 300, poll_seconds: int = 60, since: str = "",
                      min_age_minutes: int = 0) -> triage.Triage:
     """Long-poll: wait up to timeout_seconds (max 900) for NEW conversations waiting on me, then return them as
-    inbox_triage(only_new=True) does. Polls the space list every poll_seconds (min 20) and rescans only when a space
-    was active since the last look; sends progress while waiting. With MCP sampling it returns only when a new
-    item is reply_needed (the other new items come along, or are recorded quietly when none is); without sampling
-    it returns on any new candidate, for you to classify. Returns an empty result when the time runs out.
-    Quiet hours apply; items they held, or triggers younger than min_age_minutes, are rescanned when due. Edits,
-    deletions and reactions do not mark a space active, so they wait for the next message. Read-only on Chat;
-    drafts are never sent.
+    inbox_triage(only_new=True) does. Polls the space list every poll_seconds (min 20) and rescans only the spaces
+    active since the last look; sends progress while waiting. When the server classified every new item (sampling
+    or SubQ Snap) it returns only if one is reply_needed (the others come along, or are recorded quietly when none
+    is); an unclassified new item returns at once, for you to classify. Returns an empty result when the time runs
+    out. Quiet hours apply; items they held, or triggers younger than min_age_minutes, are rescanned when due.
+    Edits, deletions and reactions do not mark a space active, so they wait for the next message. Read-only on
+    Chat; drafts are never sent. `gchat-mcp watch` runs the same loop as a process (README).
     """
     total = max(0, min(timeout_seconds, WAIT_CAP))
-    poll = max(POLL_MIN, poll_seconds)
+    wait = max(POLL_MIN, poll_seconds)
     start = anyio.current_time()
-    last, result, scans, resume_at = None, None, 0, None
+    w, result = Watch(), None
 
-    def keep(items, by):
-        return any(i.category == "reply_needed" for i in items) if by == "sampling" else bool(items)
+    def keep(items):
+        return items if any(i.category in (None, "reply_needed") for i in items) else []
 
     while True:
-        spaces = await _blocking(_active, _since(since, 3))
-        mark = max((s.get("lastActiveTime", "") for s in spaces[0]), default="")
-        # Rescan on new activity, and once held items are due (quiet hours over, a trigger old enough).
-        due = resume_at is not None and datetime.now(timezone.utc) >= resume_at
-        if mark != last or due:
-            last, scans = mark, scans + 1
-            result, resume_at = await _triage(ctx, since, min_age_minutes, True, True, spaces, keep)
-            if result.items:
-                return result
+        result = await poll(ctx, w, since, min_age_minutes, keep) or result
+        if result and result.items:
+            return result
         elapsed = anyio.current_time() - start
         if elapsed >= total:
             break
-        await ctx.report_progress(elapsed, total, f"watching Google Chat ({scans} scan(s))")
-        await anyio.sleep(min(poll, total - elapsed))
+        await ctx.report_progress(elapsed, total, f"watching Google Chat ({w.scans} scan(s))")
+        await anyio.sleep(min(wait, total - elapsed))
     if result is None:
         result = triage.Triage(classified_by="client", items=[], counts=triage.counts([]), notes=[])
-    result.notes.append(f"No new reply-needed item within {total} s ({scans} scan(s)).")
+    result.notes.append(f"No new reply-needed item within {total} s ({w.scans} scan(s)).")
     return result
 
 
@@ -1193,6 +1215,9 @@ def inbox_settings(quiet_hours: str = "", timezone_name: str = "", mute: list[st
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "login":
         auth.login()
+    elif len(sys.argv) > 1 and sys.argv[1] == "watch":
+        from . import watch
+        sys.exit(watch.main(sys.argv[2:]))
     else:
         mcp.run()
 
