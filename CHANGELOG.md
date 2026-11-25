@@ -4,6 +4,22 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+### Added
+- `gchat-mcp setup`: a guided first run. It explains and links the 5 Google Cloud steps, saves the downloaded
+  client file (0600), signs you in, checks the connection with one read-only call, asks about SubQ (with what is
+  sent and kept) and the footer, and prints the config for Claude Code, Codex CLI, Claude Desktop and Cursor.
+  Every step has a flag for non-interactive use; `--check`, `--guide`, `--print-config`, `--explain-subq`.
+- `gchat-mcp setup --agent-prompt`: prints a setup prompt for an AI assistant and copies it to the clipboard.
+- `google-chat-mcp` command (same as `gchat-mcp`), so `uvx google-chat-mcp` works.
+- README quick start with two paths (assistant-led and manual), a hero illustration and setup diagrams.
+
+### Changed
+- The package is published as `google-chat-mcp` (`gchat-mcp` is taken on PyPI); the command stays `gchat-mcp`.
+- MIT license.
+- Times use the local zone by default (`GCHAT_MCP_TZ`), not a hard-coded zone.
+- Optional message footer, off by default (`inbox_settings(footer=...)` or `GCHAT_MCP_FOOTER`).
+- `login` stops after 10 minutes and every sign-in failure says what to do next.
+- `watch` retries network blips in seconds, not minutes.
 
 ## [0.2.0]
 ### Added
