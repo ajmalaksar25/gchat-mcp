@@ -1,9 +1,8 @@
 """Inbox triage: turn needs-reply candidates into structured items and classify them with a model.
 
-The server never judges human language with rules: a model decides each category. Preferred path is MCP
-sampling (`sampling/createMessage`, the client's own model; no API key in the server). When the client does not
-declare the `sampling` capability, the tool returns the candidates plus `CLASSIFY_RULES`, and the calling model
-classifies them itself. Message text is untrusted data in both paths: it is fenced as data in the prompt, and the
+The server never judges human language with rules: a model decides each category. Order: MCP sampling
+(`sampling/createMessage`, the client's own model) when the client declares it; then SubQ Snap (`snap.py`) for
+what is left, when a key is set; anything still unclassified goes back with `CLASSIFY_RULES` for the calling model. Message text is untrusted data in both paths: it is fenced as data in the prompt, and the
 model's answer is only accepted as (known id, known category, reason, draft) tuples.
 """
 import json
@@ -75,16 +74,19 @@ class Item(BaseModel):
     context: list[ContextMessage] = Field(description="Up to 3 earlier messages, oldest first.")
     new: bool = Field(description="True when this trigger was never reported before (watch cursor).")
     important: bool = False
-    category: Category | None = Field(None, description="Set when the server classified (sampling); "
+    category: Category | None = Field(None, description="Set when the server classified (sampling or snap); "
                                                         "None when the client must classify.")
+    classified_by: Literal["sampling", "snap", "client"] = Field(
+        "client", description="Who classified this item; client = left for the calling model.")
     reason: str | None = None
     draft_reply: str | None = Field(None, description="Suggested reply, never sent by the server.")
 
 
 class Triage(BaseModel):
-    classified_by: Literal["sampling", "client"] = Field(
-        description="sampling: the client's model classified via MCP sampling. client: the server returned the "
-                    "candidates unclassified and the calling model must classify them using `instructions`.")
+    classified_by: Literal["sampling", "snap", "client"] = Field(
+        description="sampling: the client's model classified via MCP sampling. snap: the server classified with "
+                    "SubQ Snap (no drafts). client: some or all items are unclassified and the calling model must "
+                    "classify them using `instructions`. Each item says who classified it.")
     instructions: str | None = None
     items: list[Item]
     counts: dict[str, int]
@@ -120,14 +122,18 @@ def item(space: dict, label: str, reason: str, ctx: list[dict], who, me: str, ne
         new=new, important=important)
 
 
-def payload(items: list[Item]) -> str:
-    """The items as the model sees them: ids, who/where, trigger rule and the fenced untrusted text."""
-    rows = [{"id": i.id, "conversation": i.conversation, "type": i.conversation_type, "from": i.sender,
+def rows(items: list[Item]) -> list[dict]:
+    """The items as a model sees them: ids, who/where, trigger rule and the untrusted text."""
+    return [{"id": i.id, "conversation": i.conversation, "type": i.conversation_type, "from": i.sender,
              "sent": i.sent_at_local, "picked_because": i.trigger,
              "earlier": [{"from": "me" if c.is_me else c.sender, "text": c.text} for c in i.context],
              "message": i.message} for i in items]
+
+
+def payload(items: list[Item]) -> str:
+    """The items fenced as untrusted data for a text prompt."""
     # No literal "<" inside the data, so the text cannot close the fence and speak outside it.
-    data = json.dumps(rows, ensure_ascii=False, indent=1).replace("<", "\\u003c")
+    data = json.dumps(rows(items), ensure_ascii=False, indent=1).replace("<", "\\u003c")
     return "<chat_data>\n" + data + "\n</chat_data>"
 
 
@@ -183,10 +189,18 @@ def parse_answer(text: str, ids: set[str]) -> tuple[dict[str, tuple[str, str, st
     return out, problems
 
 
-def apply(items: list[Item], verdicts: dict) -> None:
+def apply(items: list[Item], verdicts: dict, by: str) -> None:
     for i in items:
         if i.id in verdicts:
             i.category, i.reason, i.draft_reply = verdicts[i.id]
+            i.classified_by = by
+
+
+def overall(items: list[Item]) -> str:
+    """sampling or snap when every item was classified (snap if any was), else client."""
+    if any(i.category is None for i in items) or not items:
+        return "client"
+    return "snap" if any(i.classified_by == "snap" for i in items) else "sampling"
 
 
 def order(items: list[Item]) -> list[Item]:
