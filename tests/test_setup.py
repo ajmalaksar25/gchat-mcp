@@ -182,3 +182,15 @@ def test_login_failures_say_what_to_do(tmp_path, monkeypatch, error, says):
     with pytest.raises(SystemExit, match=says):
         auth.login()
     assert not (tmp_path / "token.json").exists()
+
+
+def test_footer_not_saved_under_an_old_sign_in(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(auth, "CLIENT", tmp_path / "cfg/client_secret.json")
+    monkeypatch.setattr(auth, "TOKEN", tmp_path / "cfg/token.json")
+    auth.TOKEN.parent.mkdir()
+    auth.TOKEN.write_text(json.dumps({"client_id": "old.apps", "refresh_token": "r"}))
+    new = tmp_path / "client_secret_new.json"
+    new.write_text(json.dumps({"installed": {"client_id": "new.apps"}}))
+    argv = ["--non-interactive", "--skip-login", "--client-secret", str(new), "--footer", "_x_"]
+    assert setup.main(argv) == 1
+    assert "needs a new sign-in" in capsys.readouterr().out

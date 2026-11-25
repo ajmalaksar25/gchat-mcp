@@ -359,6 +359,9 @@ def main(argv: list[str]) -> int:
             interactive = not args.non_interactive and sys.stdin.isatty()
             get_client(args, interactive)
             sign_in(args, interactive)
+            if args.skip_login and args.relogin and args.footer is not None:
+                raise Stop("The new key file needs a new sign-in before the footer can be saved. Run "
+                           "`gchat-mcp setup` again without --skip-login.")
             if not args.skip_login or args.footer is not None or args.subq_key_file:
                 options(args, interactive)
         print("\n" + check())
