@@ -1,9 +1,31 @@
 """Pure helpers: time/text rendering of Chat Message dicts and the needs-reply rules. No network."""
+import os
 import re
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-IST = ZoneInfo("Asia/Kolkata")
+
+def local_zone() -> ZoneInfo:
+    """The zone for shown times and naive inputs: $GCHAT_MCP_TZ, else $TZ, else the system zone, else UTC.
+
+    A bad $GCHAT_MCP_TZ raises: it is an explicit setting, so it is never replaced silently.
+    """
+    if name := os.environ.get("GCHAT_MCP_TZ", "").strip():
+        try:
+            return ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError) as e:
+            raise ValueError(f"GCHAT_MCP_TZ={name!r} is not an IANA time zone such as 'Europe/Berlin'") from e
+    names = [os.environ.get("TZ", "").strip().lstrip(":")]
+    names.append(os.path.realpath("/etc/localtime").partition("zoneinfo/")[2])  # macOS and Linux symlink
+    for n in filter(None, names):
+        try:
+            return ZoneInfo(n)
+        except (ZoneInfoNotFoundError, ValueError):
+            continue
+    return ZoneInfo("UTC")
+
+
+LOCAL = local_zone()
 SNIPPET = 200
 FORWARD_CAP = 4000
 TEXT_CAP = 2000
@@ -18,7 +40,7 @@ def rfc3339(dt: datetime) -> str:
 
 
 def fmt_time(s: str) -> str:
-    d = parse_ts(s).astimezone(IST)
+    d = parse_ts(s).astimezone(LOCAL)
     return f"{d.day} {d:%b} {d.hour % 12 or 12}:{d:%M} {'AM' if d.hour < 12 else 'PM'}"
 
 
