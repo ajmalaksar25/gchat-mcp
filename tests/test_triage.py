@@ -21,7 +21,7 @@ from gchat_mcp import chat, server, state, triage
 from tests.transport import ChatServer, ME, reply
 
 SINCE = "2026-11-20T00:00:00Z"
-NAMES = {ME: "Ajmal Aksar", "222": "Caleb", "333": "Priya", "444": "Noor"}
+NAMES = {ME: "Sam Rivera", "222": "Dana", "333": "Priya", "444": "Noor"}
 
 
 def who(u):
@@ -104,14 +104,14 @@ def test_sampling_path_classifies_orders_and_keeps_drafts_only_for_reply_needed(
     assert res["classified_by"] == "sampling" and res["instructions"] is None
     assert ids(res) == ["spaces/DM1/messages/a2", "spaces/DM2/messages/b2"]  # reply_needed first though older
     first, second = res["items"]
-    assert (first["category"], first["sender"], first["conversation_id"]) == ("reply_needed", "Caleb", "spaces/DM1")
+    assert (first["category"], first["sender"], first["conversation_id"]) == ("reply_needed", "Dana", "spaces/DM1")
     assert first["draft_reply"] == "Yes, I can join at 5." and first["reason"] == "asks if you can join a call"
     assert first["conversation_url"].startswith("https://chat.google.com/dm/")
     assert [c["text"] for c in first["context"]] == ["are we still on for the client?"] and first["context"][0]["is_me"]
     assert second["category"] == "no_reply_needed" and second["draft_reply"] is None
     assert res["counts"]["reply_needed"] == 1 and res["counts"]["no_reply_needed"] == 1
     p = seen[0]
-    assert p.includeContext == "none" and p.systemPrompt.startswith("You triage Google Chat messages for Ajmal Aksar")
+    assert p.includeContext == "none" and p.systemPrompt.startswith("You triage Google Chat messages for Sam Rivera")
     assert "untrusted data" in p.systemPrompt
     text = p.messages[0].content.text
     head, rest = text.split("<chat_data>", 1)
@@ -144,7 +144,7 @@ def test_client_without_sampling_gets_candidates_and_instructions(srv):
     assert res["classified_by"] == "client"
     assert all(i["category"] is None and i["draft_reply"] is None for i in res["items"])
     assert ids(res) == ["spaces/DM2/messages/b2", "spaces/DM1/messages/a2"]  # newest first when unclassified
-    assert "for Ajmal Aksar" in res["instructions"] and "never send" in res["instructions"]
+    assert "for Sam Rivera" in res["instructions"] and "never send" in res["instructions"]
     assert any("does not offer MCP sampling" in n for n in res["notes"])
 
 
@@ -342,7 +342,8 @@ def test_parse_quiet_rejects(s):
 
 def test_quiet_until_across_midnight():
     st = {"quiet_hours": "22:00-08:00", "tz": "Asia/Dubai"}
-    at = lambda h, m=0: datetime(2026, 11, 24, h, m, tzinfo=state.ZoneInfo("Asia/Dubai"))
+    def at(h, m=0):
+        return datetime(2026, 11, 24, h, m, tzinfo=state.ZoneInfo("Asia/Dubai"))
     assert state.quiet_until(st, at(23)) == at(8) + timedelta(days=1)
     assert state.quiet_until(st, at(3)) == at(8)
     assert state.quiet_until(st, at(8)) is None and state.quiet_until(st, at(21, 59)) is None
