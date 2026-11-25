@@ -525,8 +525,16 @@ def _footer() -> str:
     return footer_mod.expand(template, _user_label()) if "{user}" in template else template
 
 
-def _with_footer(text: str) -> tuple[str, bool]:
-    return footer_mod.append(text, _footer())
+def _outgoing_text(space: str, text: str) -> tuple[str, list[str], bool]:
+    """Mention-resolved text plus the configured footer; the original ending is checked before mention markup
+    rewrites it, so a footer already added by a client hook is never duplicated."""
+    footer = _footer()
+    already_has_footer = bool(footer and text.rstrip().endswith(footer))
+    rewritten, want = _mentions(space, text)
+    if already_has_footer:
+        return rewritten, want, False
+    rewritten, added = footer_mod.append(rewritten, footer)
+    return rewritten, want, added
 
 
 def _footer_note(added: bool) -> str:
@@ -572,8 +580,7 @@ def send_message(conversation_id: str, messageText: str, thread_id: str = "") ->
     if not messageText.strip():
         raise ValueError("messageText is empty.")
     params, body = _thread_args(space, thread_id)
-    body["text"], want = _mentions(space, messageText)
-    body["text"], footer_added = _with_footer(body["text"])
+    body["text"], want, footer_added = _outgoing_text(space, messageText)
     name = _create(space, body, params)
     return _verified(f"Sent `{name}` ({_footer_note(footer_added)})",
                      lambda: _sent_report(name, space, want, footer_added))
@@ -602,8 +609,7 @@ def send_file(conversation_id: str, path: str, text: str = "", thread_id: str = 
     """
     space = targets.space_id(conversation_id)
     params, body = _thread_args(space, thread_id)  # before the upload: a stale thread must not cost an upload
-    body["text"], want = _mentions(space, text) if text.strip() else ("", [])
-    body["text"], footer_added = _with_footer(body["text"])
+    body["text"], want, footer_added = _outgoing_text(space, text)
     f, real, size = safefile.open_checked(path, UPLOAD_CAP, expect_stat=expect_stat, expect_sha256=expect_sha256)
     with f, needs("messages"):
         mime = mimetypes.guess_type(real.name)[0] or "application/octet-stream"
@@ -646,8 +652,7 @@ def edit_message(message_id: str, new_text: str, conversation_id: str = "") -> s
     if not new_text.strip():
         raise ValueError("new_text is empty: use delete_message to remove a message.")
     _own_message(ref)
-    text, want = _mentions(ref.split("/messages/")[0], new_text)
-    text, footer_added = _with_footer(text)
+    text, want, footer_added = _outgoing_text(ref.split("/messages/")[0], new_text)
     with needs("messages"):
         chat.patch(ref, "messages.patch", {"updateMask": "text"}, {"text": text})
     try:
