@@ -88,7 +88,7 @@ def emoji_str(e: dict) -> str:
 
 
 def reaction_line(m: dict, who, me_id: str) -> str:
-    """'reactions: 👍 Caleb, Ajmal Aksar (me)' when reactors were fetched, else 'reactions: 👍 2'."""
+    """'reactions: 👍 Dana, Sam Rivera (me)' when reactors were fetched, else 'reactions: 👍 2'."""
     if m.get("_reactions") is not None:
         by: dict[str, list[str]] = {}
         for r in m["_reactions"]:
