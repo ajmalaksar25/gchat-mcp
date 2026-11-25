@@ -101,24 +101,24 @@ NOW = datetime(2026, 11, 23, 15, 0, tzinfo=timezone.utc)  # 20:30 IST
 
 
 def test_parse_when_clock_is_today_in_ist():
-    assert readstate.parse_when("19:00", NOW) == datetime(2026, 11, 23, 19, 0, tzinfo=fmt.IST)
+    assert readstate.parse_when("19:00", NOW) == datetime(2026, 11, 23, 19, 0, tzinfo=fmt.LOCAL)
     with pytest.raises(ValueError, match="future"):
         readstate.parse_when("21:00", NOW)
 
 
 def test_parse_when_iso_naive_is_ist_and_aware_kept():
-    assert readstate.parse_when("2026-11-23T19:00") == datetime(2026, 11, 23, 19, 0, tzinfo=fmt.IST)
+    assert readstate.parse_when("2026-11-23T19:00") == datetime(2026, 11, 23, 19, 0, tzinfo=fmt.LOCAL)
     assert readstate.parse_when("2026-11-23T19:00:00Z").utcoffset() == timedelta(0)
     assert readstate.parse_when("2026-11-23").hour == 0
 
 
 def test_unread_from_sets_marker_just_before_the_target():
-    target = datetime(2026, 11, 23, 19, 0, tzinfo=fmt.IST)  # 13:30:00 UTC
+    target = datetime(2026, 11, 23, 19, 0, tzinfo=fmt.LOCAL)  # 13:30:00 UTC
     assert readstate.unread_from(target, "2026-11-23T14:00:00Z") == "2026-11-23T13:29:59.999000Z"
 
 
 def test_unread_from_never_moves_the_marker_forward():
-    target = datetime(2026, 11, 23, 19, 0, tzinfo=fmt.IST)
+    target = datetime(2026, 11, 23, 19, 0, tzinfo=fmt.LOCAL)
     assert readstate.unread_from(target, "2026-11-23T10:00:00Z") is None
     assert readstate.unread_from(target, "") == "2026-11-23T13:29:59.999000Z"
 
@@ -148,3 +148,14 @@ def test_multipart_reads_in_small_chunks():
         out += chunk
         n += 1
     assert n > 3 and len(out) == len(mp)
+
+
+def test_local_zone_follows_setting_and_refuses_a_bad_one(monkeypatch):
+    monkeypatch.setenv("GCHAT_MCP_TZ", "Europe/Berlin")
+    assert fmt.local_zone().key == "Europe/Berlin"
+    monkeypatch.setenv("GCHAT_MCP_TZ", "Mars/Olympus")
+    with pytest.raises(ValueError, match="GCHAT_MCP_TZ"):
+        fmt.local_zone()
+    monkeypatch.delenv("GCHAT_MCP_TZ")
+    monkeypatch.setenv("TZ", "America/Chicago")
+    assert fmt.local_zone().key == "America/Chicago"

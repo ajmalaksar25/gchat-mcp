@@ -2,6 +2,111 @@
 
 Local stdio MCP server for Google Chat, using the GA Chat REST API under your own Google OAuth (no service account).
 
+## Requirements
+- A Google Workspace account (Business, Enterprise or Education) with Google Chat. The Chat API does not serve
+  personal `@gmail.com` accounts.
+- macOS or Linux (file locking and the `send_file` path checks use `fcntl` and `/proc`), Python 3.13+,
+  [uv](https://docs.astral.sh/uv/).
+- An MCP client, e.g. Claude Code, Codex CLI or any client that runs stdio servers.
+
+## Setup from scratch
+You bring your own Google Cloud OAuth client; nothing is shared with the author.
+
+1. **Google Cloud project.** Create one (or reuse one) in the [Cloud console](https://console.cloud.google.com/).
+2. **Enable the APIs:** Google Chat API and People API
+   (`gcloud services enable chat.googleapis.com people.googleapis.com`).
+3. **Configure the Chat app.** Chat API → Configuration: give it a name, an avatar URL and a description. Google
+   requires this even for user-authenticated calls. Interactive features can stay off.
+4. **OAuth consent screen** (Google Auth Platform → Branding / Audience). Choose **Internal** if your Workspace
+   admin lets you: only your organisation can sign in and the app needs no verification. With **External** in
+   *Testing*, add yourself as a test user; Google then expires the refresh token after 7 days, so you rerun
+   `gchat-mcp login` weekly.
+5. **OAuth client.** Clients → Create client → **Desktop app**. Download the JSON and save it as
+   `~/.config/gchat-mcp/client_secret.json` (`chmod 600`). Keep it out of the repo.
+6. **Install and sign in:**
+   ```sh
+   git clone https://github.com/ajmalaksar25/gchat-mcp && cd gchat-mcp
+   uv sync
+   uv run gchat-mcp login   # opens a browser once, listens on http://localhost:53682/
+   ```
+   The token is saved to `~/.config/gchat-mcp/token.json` (mode 0600). Run `login` again after an upgrade that
+   adds scopes; the server never opens a browser itself and says when a login is needed.
+7. **Register the server with your client**, e.g. Claude Code:
+   ```sh
+   claude mcp add -s user gchat-local -- uv run --directory /path/to/gchat-mcp gchat-mcp
+   ```
+   Codex CLI (`~/.codex/config.toml`):
+   ```toml
+   [mcp_servers.gchat-local]
+   command = "uv"
+   args = ["run", "--directory", "/path/to/gchat-mcp", "gchat-mcp"]
+   ```
+
+### Scopes requested by `login`
+| Scope | Used for |
+|---|---|
+| `chat.spaces.readonly`, `chat.messages.readonly`, `chat.memberships.readonly` | reading conversations, messages, members |
+| `chat.users.readstate.readonly`, `chat.users.readstate` | `unread`; `mark_read` / `mark_unread` |
+| `chat.messages.create`, `chat.messages` | `send_message`, `send_file`; `edit_message`, `delete_message` |
+| `chat.messages.reactions.create`, `chat.messages.reactions` | `react` (add; remove) |
+| `chat.spaces.create` | `start_conversation` |
+| `directory.readonly` | showing people's names (People API directory search) |
+| `openid`, `userinfo.email` | knowing which account is "me" |
+
+## Configuration
+| Variable | Default | Effect |
+|---|---|---|
+| `GCHAT_MCP_TZ` | `$TZ`, else the system zone, else UTC | IANA zone for shown times and for naive `since` / `HH:MM` inputs. An invalid name is an error. |
+| `GCHAT_MCP_STATE_DIR` | `~/.config/gchat-mcp/state` | Where the per-account watch state lives. |
+| `GCHAT_MCP_STATE=memory` | file store | Keep watch state in the process only. |
+| `SUBQ_API_KEY` | unset | Turns on SubQ Snap triage (see below). Also read from `~/.config/gchat-mcp/subq_key` (mode 0600). |
+| `GCHAT_TRIAGE_SNAP=off` | | Keeps Snap off even when a key is present. |
+| `GCHAT_MCP_FOOTER` | unset | Message footer for this server process; wins over the stored footer. Empty or `off` disables it. |
+
+Files the server reads or writes (all under your home directory):
+| Path | What |
+|---|---|
+| `~/.config/gchat-mcp/client_secret.json` | your OAuth client (you put it there) |
+| `~/.config/gchat-mcp/token.json` | your OAuth token, 0600 |
+| `~/.config/gchat-mcp/state/<hash>.json` | reported trigger ids and inbox settings; no message text |
+| `~/.config/gchat-mcp/subq_key` | optional SubQ key |
+| `~/.cache/gchat-mcp/attachments/` | attachments fetched by `get_attachment`, stored as plain files |
+
+Inbox settings (quiet hours, time zone for quiet hours, muted and important conversations) are changed through
+the `inbox_settings` tool and stored in the state file.
+
+## What leaves your machine
+- **Google APIs** (`chat.googleapis.com`, `people.googleapis.com`, `oauth2`): every tool call, under your own
+  OAuth grant.
+- **Your MCP client's model**: tool results (message text, names, attachments you fetch) go to whatever model
+  your client uses, as with any MCP server. With MCP sampling, triage also asks that model.
+- **SubQ (`api.subq.ai`), only if you opt in.** Snap classification is off unless you set `SUBQ_API_KEY` or create
+  `~/.config/gchat-mcp/subq_key`. When it is on, `inbox_triage`, `inbox_wait` and `gchat-mcp watch` send each
+  candidate's trigger message, up to 3 earlier messages, sender names, conversation titles and your display name
+  to SubQ. SubQ keeps Decisions inputs for up to 60 days unless your SubQ org has zero data retention. Without a
+  key, nothing is sent to SubQ; `GCHAT_TRIAGE_SNAP=off` also forces it off.
+- Nothing else: no telemetry, no update checks.
+
+## Approval (optional client hook)
+The server itself never asks for approval; the MCP client decides. The server can add a footer on its own (see
+Message footer below). In Claude Code, a `PreToolUse` hook can ask before every write.
+`hooks/gchat-footer.py` is a working example: it answers `ask` with a reason that names the target, appends
+`GCHAT_MCP_HOOK_FOOTER` (when set) to `messageText` / `text` / `new_text`, and for `send_file` binds the approved
+file (`expect_stat`, `expect_sha256`) so the server refuses a file that changed after approval. To use it, copy it
+to `~/.claude/hooks/` and add to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": "mcp__gchat.*__(send_message|send_file|add_reaction|react|mark_read|mark_unread|start_conversation|edit_message|delete_message)$",
+      "hooks": [{"type": "command", "command": "python3 ~/.claude/hooks/gchat-footer.py"}]
+    }]
+  }
+}
+```
+Other clients: use their own approval setting for MCP tool calls.
+
 ## Tools
 Read: `find_conversations`, `read_conversation`, `search_messages`, `unread` (top-level messages by the space marker, thread replies by each thread's own marker), `needs_reply`, `inbox_triage` / `inbox_wait` (below), `get_attachment` (images inline, text files as text, all saved to `~/.cache/gchat-mcp/attachments`; Drive files go to the Google Drive connector), `list_reactions`. Every message line shows its short message id after the time; the full id is `{conversation}/messages/{short id}`.
 
@@ -105,7 +210,7 @@ A long-running watcher that runs the `inbox_wait` loop and prints one JSON line 
 so a background monitor can wake an agent on each line, with triage already done:
 
 ```
-uv run --directory ~/Documents/projects/gchat-mcp gchat-mcp watch [--only reply_needed,unclassified] [--poll 30] [--since ISO] [--min-age 0]
+uv run --directory /path/to/gchat-mcp gchat-mcp watch [--only reply_needed,unclassified] [--poll 30] [--since ISO] [--min-age 0]
 {"category": "reply_needed", "classified_by": "snap", "sender": "…", "conversation": "…", "conversation_id": "spaces/…",
  "message_id": "spaces/…/messages/…", "link": "https://chat.google.com/…", "text": "first 160 chars", "sent_at_local": "25 Nov 11:51 AM"}
 ```
@@ -147,26 +252,5 @@ The cursor lives in the server, so a manual `inbox_triage` and the schedule neve
 Sources: developers.google.com/workspace/events/guides (endpoints, lifetimes), .../guides/events-chat (targets,
 event types), .../guides/auth (scopes).
 
-## Environment
-| Variable | Effect |
-|---|---|
-| `SUBQ_API_KEY` | SubQ key for Snap. Without it the server reads `~/.config/gchat-mcp/subq_key` (mode 0600); with neither, Snap is off. |
-| `GCHAT_TRIAGE_SNAP=off` | Turns Snap off even with a key. |
-| `GCHAT_MCP_STATE_DIR` / `GCHAT_MCP_STATE=memory` | Where watch state lives (see State above). |
-| `GCHAT_MCP_FOOTER` | Message footer template for this server process; overrides the stored per-user footer. Empty or `off` disables it. |
-
-**Data note:** with Snap on, the text of triage candidates (the trigger message and up to 3 earlier messages,
-names and conversation titles) is sent to SubQ (`api.subq.ai`), which keeps Decisions inputs for up to 60 days
-unless the org has zero data retention. That is the owner's choice for his own inbox; `GCHAT_TRIAGE_SNAP=off`
-keeps all chat text local.
-
-## Setup
-1. Put your OAuth client at `~/.config/gchat-mcp/client_secret.json`.
-2. `uv sync`
-3. `uv run gchat-mcp login` (opens a browser once; token saved to `~/.config/gchat-mcp/token.json`, mode 0600). Run it again after an upgrade adds scopes.
-4. Register (all aliases):
-   `env -u CLAUDE_CONFIG_DIR claude mcp add -s user gchat-local -- uv run --directory /Users/ajmalaksar/Documents/projects/gchat-mcp gchat-mcp`
-5. Every write is approved through the PreToolUse hook `~/.claude/hooks/gchat-footer.py` (a reference copy is in `hooks/`; matcher in each alias's `settings.json`). The hook can label text client-side through `GCHAT_MCP_HOOK_FOOTER` as an alternative to the server footer above and, for `send_file`, shows the resolved path, size and SHA-256 and passes `expect_stat` and `expect_sha256` so the server refuses a file that changed after approval.
-
-The server never opens a browser; without a valid token every tool says to run `gchat-mcp login`. Credentials come from one function, `auth.credentials()`.
-Tests: `uv run pytest -q`.
+## Development
+`uv sync`, then `uv run ruff check .` and `uv run python -m pytest -q`. Tests never call Google or SubQ.
