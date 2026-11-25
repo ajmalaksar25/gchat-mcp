@@ -24,20 +24,31 @@ into the server so every MCP client gets it. Read-only on Chat.
   `conversation_type`, the trigger message `id`, `thread_id`, `conversation_url` (the API's `spaceUri`; Chat
   exposes no per-message permalink), up to 3 earlier messages, `new`, and for `reply_needed` a `draft_reply`.
   Candidates are the `needs_reply` rules (metadata only: who spoke last, @-mentions, threads I posted in; my
-  reaction counts as a reply). The words are judged by a model, never by rules:
-  - **MCP sampling** (`sampling/createMessage`) when the client declares the `sampling` capability: the client's
-    own model classifies, the server needs no API key. `classified_by: "sampling"`.
-  - **Fallback** when it does not (or the user declines the request, or the answer does not validate): items come
-    back unclassified with `instructions` (the same rules), and the calling model classifies them.
-    `classified_by: "client"`, and a note says why.
+  reaction counts as a reply). The words are judged by a model, never by rules, in this order (each item's
+  `classified_by` says which one ran; the result's `classified_by` is `client` while any item is unclassified):
+  1. **MCP sampling** (`sampling/createMessage`) when the client declares the `sampling` capability: the client's
+     own model classifies, with drafts. `"sampling"`.
+  2. **SubQ Snap** (`subq-snap-1.2`, `POST https://api.subq.ai/v1/systemone`) for what sampling did not classify,
+     when the server has a key: one `choice` question per item over the three categories. Snap returns
+     probabilities, not text, so there is no draft, and an answer below confidence `snap.MIN_CONFIDENCE` (0.7) is
+     left unclassified, never guessed. A Snap error or timeout (5 s connect, 30 s read) leaves the items
+     unclassified and adds a note; triage never fails on it. `"snap"`.
+  3. **The client**: whatever is left comes back unclassified with `instructions` (the same rules), and the
+     calling model classifies it. `"client"`, and a note says why.
   Message text is fenced as untrusted data in the prompt; the model's answer is accepted only as (known id, known
   category, reason, draft) tuples, drafts only for `reply_needed`. Drafts are never sent: sending stays
   `send_message`, approved by the user through the approval hook.
 - `only_new=true` is the watch cursor: only triggers never reported before for this Google account. Every
   returned item is recorded as reported (a new message in the same conversation is a new trigger).
 - `inbox_wait(timeout_seconds ≤ 900, poll_seconds ≥ 20, since, min_age_minutes)`: long-poll. Reads the space list
-  each poll and rescans only when a space was active; sends progress; returns as soon as something new needs me
-  (with sampling: a new `reply_needed`; without: any new candidate), else an empty result at the timeout.
+  each poll and rescans only the spaces active since the last look; sends progress; returns as soon as something
+  new needs me (all classified by the server: a new `reply_needed`; otherwise any unclassified new item), else an
+  empty result at the timeout.
+- **Scope.** Every conversation I am in: DMs, group chats, and named spaces where I am @-mentioned or someone
+  answers a thread I posted in. `inbox_triage` and `needs_reply` check the 60 most recently active spaces (a note
+  says when more were skipped). The watch loops (`inbox_wait`, `gchat-mcp watch`) have no space cap: the first
+  look scans every space active in the window, later looks only the spaces that moved. Each space is read up to
+  its newest 500 messages in the window. Mute and important are optional filters (`inbox_settings`).
 - `inbox_settings(quiet_hours, timezone_name, mute, important, normal, forget_reported)`: quiet hours (e.g.
   `22:00-08:00`, held items are reported after), muted conversations (skipped), important ones (pass quiet hours,
   ranked first).
@@ -52,17 +63,37 @@ deployment implements `state.Store` (`load`/`save`/`lock`) over its database wit
 ### Client support (probed 24 Nov 2026 by logging `initialize`; spec 2025-11-25)
 | Client | sampling | resources/subscribe | elicitation | Path that runs |
 |---|---|---|---|---|
-| Claude Code 2.1.331 (protocol 2025-11-25) | no | no | form, url | fallback: the agent classifies |
-| Codex CLI 0.172 (protocol 2025-06-18) | no | no | form, url | fallback |
-| T3 Code | = the agent it runs (Claude Agent SDK, Codex, ACP agents); T3 passes MCP servers through to them | | | fallback |
+| Claude Code 2.1.331 (protocol 2025-11-25) | no | no | form, url | Snap, then the agent classifies the rest |
+| Codex CLI 0.172 (protocol 2025-06-18) | no | no | form, url | Snap, then the agent |
+| T3 Code | = the agent it runs (Claude Agent SDK, Codex, ACP agents); T3 passes MCP servers through to them | | | Snap, then the agent |
 
-So today the fallback path is the live one; sampling turns on by itself in any client that adds it (tested with
+So today Snap (when a key is set) and then the client are the live path; sampling turns on by itself in any client that adds it (tested with
 an SDK client whose sampling callback runs a real model). Watch options:
 - (a) cursor `inbox_triage(only_new=true)`: works in every client. **Use this.**
 - (b) long-poll `inbox_wait`: works in every client, but holds the agent turn open; good for a dedicated watcher.
 - (c) `resources/subscribe` + `notifications/resources/updated` for `gchat://inbox/needs-reply`: no client above
   subscribes, so the background poller it needs is not built; the resource exists for reads.
 - (d) hosted push: see below.
+
+### Push: `gchat-mcp watch`
+A long-running watcher that runs the `inbox_wait` loop and prints one JSON line to stdout (flushed) per new item,
+so a background monitor can wake an agent on each line, with triage already done:
+
+```
+uv run --directory ~/Documents/projects/gchat-mcp gchat-mcp watch [--only reply_needed,unclassified] [--poll 30] [--since ISO] [--min-age 0]
+{"category": "reply_needed", "classified_by": "snap", "sender": "…", "conversation": "…", "conversation_id": "spaces/…",
+ "message_id": "spaces/…/messages/…", "link": "https://chat.google.com/…", "text": "first 160 chars", "sent_at_local": "25 Nov 11:51 AM"}
+```
+- `--only`: kinds to print, from `reply_needed`, `worth_a_look`, `no_reply_needed`, `unclassified` (default
+  `reply_needed,unclassified`). Items of other kinds that the server classified are recorded quietly; unclassified
+  ones not printed stay for an MCP client.
+- It shares the per-user watch state with the MCP tools: a trigger is reported once across the watcher, restarts
+  of it, `inbox_triage(only_new=true)` and `inbox_wait`. Quiet hours, mute and important apply.
+- Chat or network errors: a line on stderr, then back off (`poll × 2ⁿ`, at most 15 min). A missing or expired
+  sign-in exits with code 2. SIGTERM or Ctrl-C exits cleanly with code 0. Read-only on Chat.
+- Under a background monitor (in Claude Code, the Monitor tool or a `run_in_background` Bash command that the
+  agent waits on): start the command above, and treat each stdout line as one event; stop it with SIGTERM.
+  Without sampling in the client, Snap is what makes the line arrive already classified.
 
 ### Surfacing it in T3 Code (no custom build)
 A scheduled task whose prompt is one line, e.g. every 30 minutes on weekdays:
@@ -90,6 +121,18 @@ The cursor lives in the server, so a manual `inbox_triage` and the schedule neve
    model (per-tenant key) for push-only alerts, behind the same `parse_answer` validation.
 Sources: developers.google.com/workspace/events/guides (endpoints, lifetimes), .../guides/events-chat (targets,
 event types), .../guides/auth (scopes).
+
+## Environment
+| Variable | Effect |
+|---|---|
+| `SUBQ_API_KEY` | SubQ key for Snap. Without it the server reads `~/.config/gchat-mcp/subq_key` (mode 0600); with neither, Snap is off. |
+| `GCHAT_TRIAGE_SNAP=off` | Turns Snap off even with a key. |
+| `GCHAT_MCP_STATE_DIR` / `GCHAT_MCP_STATE=memory` | Where watch state lives (see State above). |
+
+**Data note:** with Snap on, the text of triage candidates (the trigger message and up to 3 earlier messages,
+names and conversation titles) is sent to SubQ (`api.subq.ai`), which keeps Decisions inputs for up to 60 days
+unless the org has zero data retention. That is the owner's choice for his own inbox; `GCHAT_TRIAGE_SNAP=off`
+keeps all chat text local.
 
 ## Setup
 1. Put your OAuth client at `~/.config/gchat-mcp/client_secret.json`.
