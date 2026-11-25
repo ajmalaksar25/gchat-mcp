@@ -83,8 +83,6 @@ def test_footer_is_never_doubled(srv, monkeypatch):
     assert "footer added: no" in out
 
 
-
-
 def test_existing_footer_is_detected_before_mentions_are_resolved(srv, monkeypatch):
     monkeypatch.setenv("GCHAT_MCP_FOOTER", "FYI @all")
     out = server.send_message("AAA", "standup moved\n\nFYI @all")
@@ -92,10 +90,6 @@ def test_existing_footer_is_detected_before_mentions_are_resolved(srv, monkeypat
     assert text == "standup moved\n\nFYI <users/all>"
     assert text.count("FYI") == 1
     assert "footer added: no" in out
-
-
-
-
 
 
 def test_existing_mention_footer_after_one_newline_is_not_doubled(srv, monkeypatch):
