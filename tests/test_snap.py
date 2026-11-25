@@ -176,5 +176,5 @@ def test_watch_backs_off_on_errors_and_stops_on_auth(srv, monkeypatch):
         sleeps.append(t)
     monkeypatch.setattr(watch.anyio, "sleep", nap)
     assert anyio.run(lambda: watch.run({"reply_needed"}, 30, polls=5)) == 2
-    assert sleeps == [60] and len(calls) == 2
+    assert sleeps == [5] and len(calls) == 2  # a blip is retried in seconds, not minutes
 
