@@ -2,7 +2,6 @@
 URL building, query params, JSON/binary bodies, error-body parsing, pagination and server-side rewriting."""
 import json
 import re
-import threading
 import time
 
 from datetime import datetime
