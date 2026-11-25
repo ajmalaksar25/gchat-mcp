@@ -20,6 +20,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from . import fmt
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover (Windows)
@@ -28,7 +30,7 @@ except ImportError:  # pragma: no cover (Windows)
 VERSION = 1
 KEEP_DAYS = 30  # reported ids older than this are forgotten (triggers that old are outside any `since`)
 KEEP_MAX = 5000
-DEFAULT_TZ = "Asia/Kolkata"
+DEFAULT_TZ = fmt.LOCAL.key  # until the user sets one with inbox_settings
 QUIET_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*$")
 SPACE_PREFS = ("mute", "important")
 
