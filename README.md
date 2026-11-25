@@ -61,6 +61,7 @@ You bring your own Google Cloud OAuth client; nothing is shared with the author.
 | `GCHAT_MCP_STATE=memory` | file store | Keep watch state in the process only. |
 | `SUBQ_API_KEY` | unset | Turns on SubQ Snap triage (see below). Also read from `~/.config/gchat-mcp/subq_key` (mode 0600). |
 | `GCHAT_TRIAGE_SNAP=off` | | Keeps Snap off even when a key is present. |
+| `GCHAT_MCP_FOOTER` | unset | Message footer for this server process; wins over the stored footer. Empty or `off` disables it. |
 
 Files the server reads or writes (all under your home directory):
 | Path | What |
@@ -86,13 +87,13 @@ the `inbox_settings` tool and stored in the state file.
   key, nothing is sent to SubQ; `GCHAT_TRIAGE_SNAP=off` also forces it off.
 - Nothing else: no telemetry, no update checks.
 
-## Approval and a message footer (optional client hook)
-The server itself never asks for approval and adds no footer; the MCP client decides. In Claude Code, a
-`PreToolUse` hook can ask before every write and append a footer such as "_Sent by my assistant_" to message
-text. `hooks/gchat-footer.py` is a working example: it answers `ask` with a reason that names the target, appends
-`FOOTER` to `messageText` / `text` / `new_text`, and for `send_file` binds the approved file (`expect_stat`,
-`expect_sha256`) so the server refuses a file that changed after approval. To use it, copy it to
-`~/.claude/hooks/`, edit `FOOTER` (or remove the footer lines), and add to `~/.claude/settings.json`:
+## Approval (optional client hook)
+The server itself never asks for approval; the MCP client decides. The server can add a footer on its own (see
+Message footer below). In Claude Code, a `PreToolUse` hook can ask before every write.
+`hooks/gchat-footer.py` is a working example: it answers `ask` with a reason that names the target, appends
+`GCHAT_MCP_HOOK_FOOTER` (when set) to `messageText` / `text` / `new_text`, and for `send_file` binds the approved
+file (`expect_stat`, `expect_sha256`) so the server refuses a file that changed after approval. To use it, copy it
+to `~/.claude/hooks/` and add to `~/.claude/settings.json`:
 
 ```json
 {
@@ -118,6 +119,31 @@ Write (all act as you; each docstring says: act only when asked for this action 
 - `edit_message(message_id, new_text)` / `delete_message(message_id)`: only messages whose sender is me, checked before the API call.
 
 A write that the API refuses for a missing grant (403 insufficient scope) says to run `gchat-mcp login` once; `token.json` records requested scopes, not granted ones, so the API's answer is the signal.
+
+## Message footer
+`send_message`, `send_file` captions and `edit_message` can append one footer in the server. It is **off by
+default**. An empty value or `off` disables it. When the text already ends with the configured footer it is not
+added again, and the write read-back says `footer added: yes` or `footer added: no`.
+
+Per Google account, stored with the other per-user settings:
+
+```
+inbox_settings(footer="_Sent by {user}_")
+```
+
+`{user}` becomes the signed-in user's display name (email when no display name is readable). The value lives as
+`settings.footer` in the per-user state JSON under `~/.config/gchat-mcp/state/`. Or set it for the server process:
+
+```
+export GCHAT_MCP_FOOTER='_Sent by {user}_'
+```
+
+The environment variable wins whenever it exists, so `GCHAT_MCP_FOOTER=off` (or an empty value) disables even a
+stored footer.
+
+A client-side hook is an alternative: it can rewrite `messageText`, `text` or `new_text` before the MCP call. The
+reference Claude Code hook in `hooks/` does this when `GCHAT_MCP_HOOK_FOOTER` is set (no `{user}` expansion there).
+Prefer one labelling layer; when both are present, the server does not add a second copy of the same footer.
 
 ## Inbox triage and watching
 Which conversations need my reply, which are worth a look, and which are trivial ("ok", "thanks", an emoji), built
@@ -153,9 +179,9 @@ into the server so every MCP client gets it. Read-only on Chat.
   says when more were skipped). The watch loops (`inbox_wait`, `gchat-mcp watch`) have no space cap: the first
   look scans every space active in the window, later looks only the spaces that moved. Each space is read up to
   its newest 500 messages in the window. Mute and important are optional filters (`inbox_settings`).
-- `inbox_settings(quiet_hours, timezone_name, mute, important, normal, forget_reported)`: quiet hours (e.g.
-  `22:00-08:00`, held items are reported after), muted conversations (skipped), important ones (pass quiet hours,
-  ranked first).
+- `inbox_settings(quiet_hours, timezone_name, mute, important, normal, forget_reported, footer)`: quiet hours
+  (e.g. `22:00-08:00`, held items are reported after), muted conversations (skipped), important ones (pass quiet
+  hours, ranked first), and the optional message footer (above).
 - Resource `gchat://inbox/needs-reply`: the unclassified candidates as JSON (reading it records nothing).
 
 **State** is per user, keyed by a hash of the Google account id from the OAuth grant: reported trigger ids

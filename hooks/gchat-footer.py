@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""PreToolUse for the local Google Chat MCP: ask before every write; append the Claude Code footer to message text.
+"""PreToolUse for the local Google Chat MCP: ask before every write; optionally append a client-side footer.
 
 Every write tool asks for confirmation ("ask") with a reason that names the target, so the user sees the final
-text, file, reaction, read-state change, new conversation or edit/delete before it happens.
+text, file, reaction, read-state change, new conversation or edit/delete before it happens. Server-side footers
+(`inbox_settings` or `GCHAT_MCP_FOOTER`) are the default choice; this hook appends `GCHAT_MCP_HOOK_FOOTER` only
+when a user opts into client-side labelling with that variable.
 """
 import hashlib
 import json
@@ -10,7 +12,8 @@ import os
 import sys
 import time
 
-FOOTER = "_Sent by Ajmal's Claude Code_"
+FOOTER = os.environ.get("GCHAT_MCP_HOOK_FOOTER", "").strip()
+FOOTER_ON = bool(FOOTER) and FOOTER.lower() != "off"
 # Tool name suffix -> argument that carries message text (gets the footer).
 TEXT_ARG = {"send_message": "messageText", "send_file": "text", "edit_message": "new_text"}
 
@@ -64,10 +67,10 @@ def reason(tool: str, a: dict) -> str:
     if tool == "start_conversation":
         return f'Google Chat start conversation: {a.get("emails")} {a.get("name") or ""}'.rstrip()
     if tool == "edit_message":
-        return f'Google Chat edit: {a.get("message_id")} (footer added)'
+        return f'Google Chat edit: {a.get("message_id")}' + (" (footer added)" if FOOTER_ON else "")
     if tool == "delete_message":
         return f'Google Chat DELETE: {a.get("message_id")}'
-    return "Google Chat send: footer added"
+    return "Google Chat send" + (": footer added" if FOOTER_ON else "")
 
 
 event = json.load(sys.stdin)
@@ -84,9 +87,9 @@ arg = TEXT_ARG.get(tool)
 if arg:
     text = tool_input.get(arg)
     if text is None and tool == "send_file":
-        text = ""  # a file sent without a caption still carries the footer
+        text = ""  # when footers are on, a file without a caption still carries one
     if isinstance(text, str):
-        if not text.rstrip().endswith(FOOTER):
+        if FOOTER_ON and not text.rstrip().endswith(FOOTER):
             tool_input[arg] = (f"{text.rstrip()}\n\n" if text.strip() else "") + FOOTER
         out["updatedInput"] = tool_input
     elif tool == "send_message":
