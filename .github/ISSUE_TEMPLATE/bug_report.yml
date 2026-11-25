@@ -1,0 +1,37 @@
+name: Bug report
+description: Something does not work as the README says.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not paste tokens, client secrets or real chat messages. Security problems: see SECURITY.md."
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The tool call or command, with made-up values.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: gchat-mcp version or commit
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: OS, Python version, MCP client and version
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Error output
+      render: text
