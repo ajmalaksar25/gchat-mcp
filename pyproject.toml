@@ -27,6 +27,7 @@ Changelog = "https://github.com/ajmalaksar25/gchat-mcp/blob/main/CHANGELOG.md"
 
 [project.scripts]
 gchat-mcp = "gchat_mcp.server:main"
+google-chat-mcp = "gchat_mcp.server:main"  # so `uvx google-chat-mcp` works
 
 [dependency-groups]
 dev = [

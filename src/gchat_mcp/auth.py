@@ -1,11 +1,12 @@
 """User OAuth credentials: login subcommand writes the token; the server only reads/refreshes it."""
 import os
+import time
 from pathlib import Path
 
 from google.auth.exceptions import GoogleAuthError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import InstalledAppFlow, WSGITimeoutError
 
 DIR = Path.home() / ".config" / "gchat-mcp"
 CLIENT = DIR / "client_secret.json"
@@ -59,10 +60,28 @@ def credentials() -> Credentials:
     return creds
 
 
+LOGIN_SECONDS = 600
+
+
 def login() -> None:
+    """Open the Google sign-in in a browser and save the token; every failure says what to do next."""
     if not CLIENT.exists():
-        raise SystemExit(f"Missing OAuth client file: {CLIENT}")
+        raise SystemExit(f"Missing OAuth client file {CLIENT}: run `gchat-mcp setup` to create it.")
     flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT), SCOPES)
-    # Fixed port: the shared Web client only accepts the registered http://localhost:53682/.
-    _save(flow.run_local_server(port=53682, prompt="consent"))
+    start = time.monotonic()
+    try:
+        # Fixed port: a Web client only accepts a registered redirect (http://localhost:53682/); Desktop accepts any.
+        creds = flow.run_local_server(port=53682, prompt="consent", timeout_seconds=LOGIN_SECONDS,
+                                      authorization_prompt_message="If no browser opened, open this link: {url}")
+    except WSGITimeoutError:  # also raised at once when anything but Google's redirect reaches the port
+        if time.monotonic() - start >= LOGIN_SECONDS:
+            raise SystemExit("Sign-in was not finished within 10 minutes. Run `gchat-mcp login` and try again.") from None
+        raise SystemExit("The sign-in did not come back from Google. Run `gchat-mcp login` again, click Allow on the "
+                         "Google page, and wait for 'Saved token'.") from None
+    except OSError as e:
+        raise SystemExit(f"Could not listen on http://localhost:53682/ ({e}). Close any other `gchat-mcp login` "
+                         "window and try again.") from None
+    except Exception as e:  # oauthlib raises its own classes for a denied or broken consent
+        raise SystemExit(f"Google sign-in failed ({e}). Run `gchat-mcp login` again and click Allow.") from None
+    _save(creds)
     print(f"Saved token to {TOKEN}")
