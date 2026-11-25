@@ -15,6 +15,31 @@ Write (all act as you; each docstring says: act only when asked for this action 
 
 A write that the API refuses for a missing grant (403 insufficient scope) says to run `gchat-mcp login` once; `token.json` records requested scopes, not granted ones, so the API's answer is the signal.
 
+## Message footer
+`send_message`, `send_file` captions and `edit_message` can append one footer in the server. It is **off by
+default**. An empty value or `off` disables it. When the text already ends with the configured footer it is not
+added again, and the write read-back says `footer added: yes` or `footer added: no`.
+
+Per Google account, stored with the other per-user settings:
+
+```
+inbox_settings(footer="_Sent by {user}_")
+```
+
+`{user}` becomes the signed-in user's display name (email when no display name is readable). The value lives as
+`settings.footer` in the per-user state JSON under `~/.config/gchat-mcp/state/`. Or set it for the server process:
+
+```
+export GCHAT_MCP_FOOTER='_Sent by {user}_'
+```
+
+The environment variable wins whenever it exists, so `GCHAT_MCP_FOOTER=off` (or an empty value) disables even a
+stored footer.
+
+A client-side hook is an alternative: it can rewrite `messageText`, `text` or `new_text` before the MCP call. The
+reference Claude Code hook in `hooks/` does this when `GCHAT_MCP_HOOK_FOOTER` is set (no `{user}` expansion there).
+Prefer one labelling layer; when both are present, the server does not add a second copy of the same footer.
+
 ## Inbox triage and watching
 Which conversations need my reply, which are worth a look, and which are trivial ("ok", "thanks", an emoji), built
 into the server so every MCP client gets it. Read-only on Chat.
@@ -49,9 +74,9 @@ into the server so every MCP client gets it. Read-only on Chat.
   says when more were skipped). The watch loops (`inbox_wait`, `gchat-mcp watch`) have no space cap: the first
   look scans every space active in the window, later looks only the spaces that moved. Each space is read up to
   its newest 500 messages in the window. Mute and important are optional filters (`inbox_settings`).
-- `inbox_settings(quiet_hours, timezone_name, mute, important, normal, forget_reported)`: quiet hours (e.g.
-  `22:00-08:00`, held items are reported after), muted conversations (skipped), important ones (pass quiet hours,
-  ranked first).
+- `inbox_settings(quiet_hours, timezone_name, mute, important, normal, forget_reported, footer)`: quiet hours
+  (e.g. `22:00-08:00`, held items are reported after), muted conversations (skipped), important ones (pass quiet
+  hours, ranked first), and the optional message footer (above).
 - Resource `gchat://inbox/needs-reply`: the unclassified candidates as JSON (reading it records nothing).
 
 **State** is per user, keyed by a hash of the Google account id from the OAuth grant: reported trigger ids
@@ -128,6 +153,7 @@ event types), .../guides/auth (scopes).
 | `SUBQ_API_KEY` | SubQ key for Snap. Without it the server reads `~/.config/gchat-mcp/subq_key` (mode 0600); with neither, Snap is off. |
 | `GCHAT_TRIAGE_SNAP=off` | Turns Snap off even with a key. |
 | `GCHAT_MCP_STATE_DIR` / `GCHAT_MCP_STATE=memory` | Where watch state lives (see State above). |
+| `GCHAT_MCP_FOOTER` | Message footer template for this server process; overrides the stored per-user footer. Empty or `off` disables it. |
 
 **Data note:** with Snap on, the text of triage candidates (the trigger message and up to 3 earlier messages,
 names and conversation titles) is sent to SubQ (`api.subq.ai`), which keeps Decisions inputs for up to 60 days
@@ -140,7 +166,7 @@ keeps all chat text local.
 3. `uv run gchat-mcp login` (opens a browser once; token saved to `~/.config/gchat-mcp/token.json`, mode 0600). Run it again after an upgrade adds scopes.
 4. Register (all aliases):
    `env -u CLAUDE_CONFIG_DIR claude mcp add -s user gchat-local -- uv run --directory /Users/ajmalaksar/Documents/projects/gchat-mcp gchat-mcp`
-5. Every write is approved through the PreToolUse hook `~/.claude/hooks/gchat-footer.py` (a reference copy is in `hooks/`; matcher in each alias's `settings.json`). It adds the footer to message text and, for `send_file`, shows the resolved path, size and SHA-256 and passes `expect_stat` and `expect_sha256` so the server refuses a file that changed after approval.
+5. Every write is approved through the PreToolUse hook `~/.claude/hooks/gchat-footer.py` (a reference copy is in `hooks/`; matcher in each alias's `settings.json`). The hook can label text client-side through `GCHAT_MCP_HOOK_FOOTER` as an alternative to the server footer above and, for `send_file`, shows the resolved path, size and SHA-256 and passes `expect_stat` and `expect_sha256` so the server refuses a file that changed after approval.
 
 The server never opens a browser; without a valid token every tool says to run `gchat-mcp login`. Credentials come from one function, `auth.credentials()`.
 Tests: `uv run pytest -q`.

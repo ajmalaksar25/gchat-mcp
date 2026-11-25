@@ -342,7 +342,8 @@ def test_parse_quiet_rejects(s):
 
 def test_quiet_until_across_midnight():
     st = {"quiet_hours": "22:00-08:00", "tz": "Asia/Dubai"}
-    at = lambda h, m=0: datetime(2026, 11, 24, h, m, tzinfo=state.ZoneInfo("Asia/Dubai"))
+    def at(h, m=0):
+        return datetime(2026, 11, 24, h, m, tzinfo=state.ZoneInfo("Asia/Dubai"))
     assert state.quiet_until(st, at(23)) == at(8) + timedelta(days=1)
     assert state.quiet_until(st, at(3)) == at(8)
     assert state.quiet_until(st, at(8)) is None and state.quiet_until(st, at(21, 59)) is None
