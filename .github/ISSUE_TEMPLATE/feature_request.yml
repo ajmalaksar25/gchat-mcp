@@ -1,0 +1,19 @@
+name: Feature request
+description: A new tool, option or behaviour.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What do you need to do?
+      description: The task, not the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How could the server help?
+  - type: textarea
+    id: api
+    attributes:
+      label: Google Chat API methods or docs involved, if you know them
