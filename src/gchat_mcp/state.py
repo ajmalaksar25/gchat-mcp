@@ -20,6 +20,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from . import fmt
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover (Windows)
@@ -28,13 +30,14 @@ except ImportError:  # pragma: no cover (Windows)
 VERSION = 1
 KEEP_DAYS = 30  # reported ids older than this are forgotten (triggers that old are outside any `since`)
 KEEP_MAX = 5000
-DEFAULT_TZ = "Asia/Kolkata"
+DEFAULT_TZ = fmt.LOCAL.key  # until the user sets one with inbox_settings
 QUIET_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*$")
 SPACE_PREFS = ("mute", "important")
 
 
 def empty() -> dict:
-    return {"version": VERSION, "reported": {}, "settings": {"quiet_hours": "", "tz": DEFAULT_TZ, "spaces": {}}}
+    return {"version": VERSION, "reported": {},
+            "settings": {"quiet_hours": "", "tz": DEFAULT_TZ, "spaces": {}, "footer": ""}}
 
 
 def user_key(user_id: str) -> str:
@@ -135,6 +138,8 @@ def _normalise(d) -> dict:
                 pass  # a bad stored value means no quiet hours, never a broken watch
         if isinstance(st.get("spaces"), dict):
             out["settings"]["spaces"] = {str(k): v for k, v in st["spaces"].items() if v in SPACE_PREFS}
+        if isinstance(st.get("footer"), str):
+            out["settings"]["footer"] = st["footer"]
     return out
 
 
