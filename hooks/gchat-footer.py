@@ -13,7 +13,7 @@ import sys
 import time
 
 FOOTER = os.environ.get("GCHAT_MCP_HOOK_FOOTER", "").strip()
-FOOTER_ON = bool(FOOTER) and FOOTER.lower() not in ("off", "none")
+FOOTER_ON = bool(FOOTER) and FOOTER.lower() != "off"
 # Tool name suffix -> argument that carries message text (gets the footer).
 TEXT_ARG = {"send_message": "messageText", "send_file": "text", "edit_message": "new_text"}
 
