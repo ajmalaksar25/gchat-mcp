@@ -8,6 +8,7 @@ import getpass
 import json
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
@@ -101,6 +102,10 @@ def write_private(path: Path, text: str) -> None:
     os.chmod(path, 0o600)
 
 
+def client_id(data) -> str:
+    return next((data[k]["client_id"] for k in ("installed", "web") if isinstance(data.get(k), dict)), "")
+
+
 def store_client(src: Path) -> str:
     """Validate and copy the client file to the config dir (0600); returns its kind."""
     try:
@@ -112,7 +117,16 @@ def store_client(src: Path) -> str:
     kind = client_kind(data)
     if src.resolve() != auth.CLIENT.resolve():
         write_private(auth.CLIENT, json.dumps(data))
+    os.chmod(auth.CLIENT, 0o600)
     return kind
+
+
+def token_client_id() -> str:
+    """The OAuth client the saved token belongs to ('' when there is no readable token)."""
+    try:
+        return json.loads(auth.TOKEN.read_text()).get("client_id", "")
+    except (OSError, ValueError):
+        return ""
 
 
 def clipboard_command(system: str, which=shutil.which) -> list[str] | None:
@@ -132,18 +146,26 @@ def copy(text: str) -> bool:
         return False
 
 
-def server_command(which=shutil.which) -> list[str]:
-    """How a client should start the server: uvx when present (absolute path, GUI apps lack the shell PATH)."""
-    uvx = which("uvx")
-    if uvx:
+def server_command(which=shutil.which, here: Path = Path(__file__).resolve(), prefix: str = sys.prefix) -> list[str]:
+    """How a client should start the server, as this setup was run: uvx, a source checkout, or an install.
+
+    Paths are absolute because GUI apps (Claude Desktop, Cursor) do not get the shell's PATH."""
+    uvx, uv = which("uvx"), which("uv")
+    root = here.parents[2]
+    if "archive-v0" in Path(prefix).parts and uvx:
         return [uvx, *UVX]
-    exe = which("gchat-mcp") or sys.argv[0]
-    return [str(Path(exe).resolve())]
+    if "site-packages" not in here.parts and (root / "pyproject.toml").exists() and uv:
+        return [uv, "run", "--directory", str(root), "gchat-mcp"]
+    exe = which("gchat-mcp")
+    if exe:
+        return [str(Path(exe).resolve())]
+    return [uvx, *UVX] if uvx else [str(Path(sys.argv[0]).resolve())]
 
 
-def configs(cmd: list[str]) -> str:
+def configs(cmd: list[str], which=shutil.which) -> str:
     """Ready-to-paste config for Claude Code, Codex CLI, Claude Desktop and Cursor."""
-    short = " ".join(["uvx", *cmd[1:]] if Path(cmd[0]).name == "uvx" else cmd)
+    head = Path(cmd[0]).name if which(Path(cmd[0]).name) == cmd[0] else cmd[0]  # short name only if PATH finds it
+    short = shlex.join([head, *cmd[1:]])
     entry = json.dumps({"mcpServers": {NAME: {"command": cmd[0], "args": cmd[1:]}}}, indent=2)
     desktop = ("~/Library/Application Support/Claude/claude_desktop_config.json" if platform.system() == "Darwin"
                else "~/.config/Claude/claude_desktop_config.json")
@@ -216,7 +238,12 @@ def parser() -> argparse.ArgumentParser:
 def save_footer(text: str) -> str:
     from . import chat, footer, state
     value = footer.clean(text)
-    with state.store().transact(chat.me_id()) as st:
+    try:
+        me = chat.me_id()
+    except auth.AuthError:
+        raise Stop("The footer is stored per account, so it needs a sign-in first. Run `gchat-mcp setup` again "
+                   "without --skip-login.") from None
+    with state.store().transact(me) as st:
         st["settings"]["footer"] = value
     return f"Footer: {value}" if value else "Footer: off"
 
@@ -243,6 +270,10 @@ def get_client(args, interactive: bool) -> None:
                                    "then press Enter: "))
     kind = store_client(src)
     print(f"Key file: saved to {auth.CLIENT} (only you can read it).")
+    old = token_client_id()
+    if old and old != client_id(json.loads(auth.CLIENT.read_text())):
+        args.relogin = True  # the saved sign-in belongs to another client
+        print("  This is a different key file from your last sign-in, so you will sign in again.")
     if kind == "web":
         print("  Note: this is a Web client. It works only if http://localhost:53682/ is one of its authorised "
               "redirect URIs; a Desktop app client needs nothing extra.")
@@ -267,7 +298,10 @@ def sign_in(args, interactive: bool) -> None:
 
 def options(args, interactive: bool) -> None:
     if args.subq_key_file:
-        key = clean_path(args.subq_key_file).read_text().strip()
+        try:
+            key = clean_path(args.subq_key_file).read_text().strip()
+        except OSError as e:
+            raise Stop(f"Could not read the SubQ key file ({e}). Save the key in a file and give its path.") from None
     elif interactive and not auth_key_present():
         print("\n" + SUBQ)
         key = getpass.getpass("Paste a SubQ key to turn it on (hidden), or press Enter to keep it off: ").strip()
@@ -325,7 +359,7 @@ def main(argv: list[str]) -> int:
             interactive = not args.non_interactive and sys.stdin.isatty()
             get_client(args, interactive)
             sign_in(args, interactive)
-            if not args.skip_login:
+            if not args.skip_login or args.footer is not None or args.subq_key_file:
                 options(args, interactive)
         print("\n" + check())
     except SystemExit as e:  # Stop, or a sign-in failure from auth.login

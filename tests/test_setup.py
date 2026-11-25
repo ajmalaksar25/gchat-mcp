@@ -36,6 +36,38 @@ def test_store_client_copies_private(tmp_path, monkeypatch):
     assert stat.S_IMODE(auth.CLIENT.stat().st_mode) == 0o600
 
 
+def test_store_client_in_place_is_made_private(tmp_path, monkeypatch):
+    monkeypatch.setattr(auth, "CLIENT", tmp_path / "client_secret.json")
+    auth.CLIENT.write_text(json.dumps({"installed": {"client_id": "1.apps"}}))
+    auth.CLIENT.chmod(0o644)
+    setup.store_client(auth.CLIENT)
+    assert stat.S_IMODE(auth.CLIENT.stat().st_mode) == 0o600
+
+
+def test_new_client_forces_a_new_sign_in(tmp_path, monkeypatch):
+    monkeypatch.setattr(auth, "CLIENT", tmp_path / "cfg/client_secret.json")
+    monkeypatch.setattr(auth, "TOKEN", tmp_path / "cfg/token.json")
+    auth.TOKEN.parent.mkdir()
+    auth.TOKEN.write_text(json.dumps({"client_id": "old.apps", "refresh_token": "r"}))
+    new = tmp_path / "client_secret_new.json"
+    new.write_text(json.dumps({"installed": {"client_id": "new.apps"}}))
+    args = setup.parser().parse_args(["--client-secret", str(new)])
+    setup.get_client(args, interactive=False)
+    assert args.relogin
+    args = setup.parser().parse_args(["--client-secret", str(new)])
+    auth.TOKEN.write_text(json.dumps({"client_id": "new.apps", "refresh_token": "r"}))
+    setup.get_client(args, interactive=False)
+    assert not args.relogin
+
+
+def test_footer_with_skip_login_and_no_sign_in_stops(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(auth, "CLIENT", tmp_path / "client_secret.json")
+    monkeypatch.setattr(auth, "TOKEN", tmp_path / "token.json")
+    auth.CLIENT.write_text(json.dumps({"installed": {"client_id": "1.apps"}}))
+    assert setup.main(["--non-interactive", "--skip-login", "--footer", "_sent by me_"]) == 1
+    assert "needs a sign-in first" in capsys.readouterr().out
+
+
 def test_store_client_failures_name_the_next_step(tmp_path, monkeypatch):
     monkeypatch.setattr(auth, "CLIENT", tmp_path / "cfg" / "client_secret.json")
     with pytest.raises(setup.Stop, match="No file at"):
@@ -65,16 +97,34 @@ def test_clipboard_command():
     assert setup.clipboard_command("Linux", lambda c: False) is None
 
 
-def test_server_command_and_configs():
-    cmd = setup.server_command(lambda c: "/opt/bin/uvx" if c == "uvx" else None)
+def test_server_command_and_configs(tmp_path):
+    which = {"uvx": "/opt/bin/uvx", "uv": "/opt/bin/uv"}.get
+    installed = tmp_path / "lib/python3.13/site-packages/gchat_mcp/setup.py"
+    cmd = setup.server_command(which, installed, "/home/u/.cache/uv/archive-v0/AbC")
     assert cmd == ["/opt/bin/uvx", "--python", "3.13", "google-chat-mcp"]
-    text = setup.configs(cmd)
+    text = setup.configs(cmd, which)
     assert "claude mcp add -s user gchat -- uvx --python 3.13 google-chat-mcp" in text
     assert "codex mcp add gchat -- uvx --python 3.13 google-chat-mcp" in text
     block = json.loads(text[text.index("{"):text.index("}\n}") + 3])
     assert block == {"mcpServers": {"gchat": {"command": "/opt/bin/uvx", "args": ["--python", "3.13", "google-chat-mcp"]}}}
-    no_uvx = setup.server_command(lambda c: "/home/u/.local/bin/gchat-mcp" if c == "gchat-mcp" else None)
-    assert no_uvx == [str(Path("/home/u/.local/bin/gchat-mcp").resolve())]
+    assert "-- /opt/bin/uvx --python" in setup.configs(cmd, lambda c: None)  # uvx not on PATH: keep the full path
+
+
+def test_server_command_source_checkout(tmp_path):
+    root = tmp_path / "My Code" / "gchat-mcp"
+    (root / "src/gchat_mcp").mkdir(parents=True)
+    (root / "pyproject.toml").write_text("")
+    which = {"uvx": "/opt/bin/uvx", "uv": "/opt/bin/uv"}.get
+    cmd = setup.server_command(which, root / "src/gchat_mcp/setup.py", "/x/.venv")
+    assert cmd == ["/opt/bin/uv", "run", "--directory", str(root), "gchat-mcp"]
+    assert f"-- uv run --directory '{root}' gchat-mcp" in setup.configs(cmd, which)  # quoted: the path has a space
+
+
+def test_server_command_installed_tool(tmp_path):
+    here = tmp_path / "tools/google-chat-mcp/lib/python3.13/site-packages/gchat_mcp/setup.py"
+    which = {"uvx": "/opt/bin/uvx", "gchat-mcp": "/home/u/.local/bin/gchat-mcp"}.get
+    assert setup.server_command(which, here, "/home/u/.local/share/uv/tools/google-chat-mcp") == [
+        str(Path("/home/u/.local/bin/gchat-mcp").resolve())]
 
 
 def test_prog():
