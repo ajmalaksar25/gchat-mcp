@@ -94,6 +94,16 @@ def test_existing_footer_is_detected_before_mentions_are_resolved(srv, monkeypat
     assert "footer added: no" in out
 
 
+
+
+def test_footer_matching_part_of_a_terminal_mention_is_still_added(srv, monkeypatch):
+    monkeypatch.setenv("GCHAT_MCP_FOOTER", "[Support]")
+    srv.profiles = {i: {"name": n, "email": f"{n.lower().replace(' ', '.')}@x.com"}
+                    for i, n in {ME: "Me", "222": "Support", "333": "Priya", "444": "Noor"}.items()}
+    server.send_message("AAA", "Thanks @[Support]")
+    assert created_text(srv) == "Thanks <users/222>\n\n[Support]"
+
+
 def test_file_caption_gets_footer(srv, tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("GCHAT_MCP_FOOTER", FOOTER)
