@@ -4,6 +4,8 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+
+## [0.3.0] - 2026-11-26
 ### Added
 - `gchat-mcp setup`: a guided first run. It explains and links the 5 Google Cloud steps, saves the downloaded
   client file (0600), signs you in, checks the connection with one read-only call, asks about SubQ (with what is
