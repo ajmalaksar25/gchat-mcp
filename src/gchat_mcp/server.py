@@ -525,12 +525,20 @@ def _footer() -> str:
     return footer_mod.expand(template, _user_label()) if "{user}" in template else template
 
 
+def _inside_mention_token(text: str, start: int) -> bool:
+    """True when `start` is strictly inside a mention token, so a matching suffix there is not a footer."""
+    spans = list(mentions.TOKEN_RE.finditer(text)) + list(mentions.BARE_ALL_RE.finditer(text))
+    return any(m.start() < start < m.end() for m in spans)
+
+
 def _outgoing_text(space: str, text: str) -> tuple[str, list[str], bool]:
     """Mention-resolved text plus the configured footer; the original ending is checked before mention markup
     rewrites it, so a footer already added by a client hook is never duplicated."""
     footer = _footer()
     stripped = text.rstrip()
-    already_has_footer = bool(footer) and (stripped == footer or stripped.endswith("\n\n" + footer))
+    already_has_footer = False
+    if footer and stripped.endswith(footer):
+        already_has_footer = not _inside_mention_token(stripped, len(stripped) - len(footer))
     rewritten, want = _mentions(space, text)
     if already_has_footer:
         return rewritten, want, False

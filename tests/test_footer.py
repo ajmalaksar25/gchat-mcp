@@ -96,6 +96,16 @@ def test_existing_footer_is_detected_before_mentions_are_resolved(srv, monkeypat
 
 
 
+
+
+def test_existing_mention_footer_after_one_newline_is_not_doubled(srv, monkeypatch):
+    monkeypatch.setenv("GCHAT_MCP_FOOTER", "FYI @all")
+    server.send_message("AAA", "standup moved\nFYI @all")
+    text = created_text(srv)
+    assert text == "standup moved\nFYI <users/all>"
+    assert text.count("FYI") == 1
+
+
 def test_footer_matching_part_of_a_terminal_mention_is_still_added(srv, monkeypatch):
     monkeypatch.setenv("GCHAT_MCP_FOOTER", "[Support]")
     srv.profiles = {i: {"name": n, "email": f"{n.lower().replace(' ', '.')}@x.com"}
