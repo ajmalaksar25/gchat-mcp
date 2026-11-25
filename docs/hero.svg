@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700" viewBox="0 0 1200 700" role="img" aria-labelledby="t d">
+  <title id="t">An AI assistant triaging Google Chat</title>
+  <desc id="d">Illustration with made-up people. The user asks what needs a reply; the assistant lists two messages that need a reply with suggested drafts, one worth a look, and four that need nothing.</desc>
+  <style>
+    .ui { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    .ink { fill: #1f2328; } .mute { fill: #59636e; } .faint { fill: #8c959f; }
+    .accent { fill: #137333; } .h { font-size: 15px; font-weight: 600; letter-spacing: .2px; }
+    .b { font-size: 17px; } .s { font-size: 14px; } .name { font-size: 16px; font-weight: 600; }
+  </style>
+  <rect width="1200" height="700" rx="20" fill="#f6f8fa"/>
+  <!-- window -->
+  <rect x="40" y="36" width="1120" height="628" rx="14" fill="#ffffff" stroke="#d0d7de"/>
+  <path d="M40 50a14 14 0 0 1 14-14h1092a14 14 0 0 1 14 14v30H40z" fill="#f6f8fa"/>
+  <line x1="40" y1="80" x2="1160" y2="80" stroke="#d0d7de"/>
+  <circle cx="66" cy="58" r="6" fill="#d0d7de"/><circle cx="86" cy="58" r="6" fill="#d0d7de"/><circle cx="106" cy="58" r="6" fill="#d0d7de"/>
+  <text x="600" y="63" text-anchor="middle" class="ui s mute">Your AI assistant · Google Chat connected</text>
+
+  <!-- user message -->
+  <rect x="742" y="104" width="390" height="46" rx="23" fill="#e6f4ea"/>
+  <text x="937" y="133" text-anchor="middle" class="ui b ink">What needs a reply in Google Chat?</text>
+
+  <!-- answer headline -->
+  <text x="72" y="190" class="ui ink" font-size="21" font-weight="600">2 need a reply, 1 is worth a look, 4 need nothing.</text>
+  <text x="72" y="216" class="ui s mute">From 7 new messages since 9:00. Drafts are suggestions: nothing is sent until you approve one.</text>
+
+  <!-- reply needed -->
+  <rect x="72" y="244" width="4" height="236" rx="2" class="accent"/>
+  <text x="92" y="260" class="ui h accent">REPLY NEEDED</text>
+
+  <text x="92" y="292" class="ui name ink">Dana Whitfield</text>
+  <text x="222" y="292" class="ui s mute">direct message · 9:42</text>
+  <text x="92" y="318" class="ui b ink">“Can you confirm the Thursday slot for the vendor demo?”</text>
+  <rect x="92" y="330" width="500" height="34" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="106" y="352" class="ui s mute">Draft: <tspan class="ink">Thursday 3 pm works. I'll send the invite today.</tspan></text>
+
+  <line x1="92" y1="380" x2="1128" y2="380" stroke="#eaeef2"/>
+  <text x="92" y="408" class="ui name ink">Marco Ruiz</text>
+  <text x="196" y="408" class="ui s mute">launch-planning · 10:15</text>
+  <text x="92" y="434" class="ui b ink">“Who owns the pricing page copy? We need a name by noon.”</text>
+  <rect x="92" y="446" width="500" height="34" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="106" y="468" class="ui s mute">Draft: <tspan class="ink">I'll take it. First version by 11:30.</tspan></text>
+
+  <!-- worth a look -->
+  <rect x="72" y="510" width="4" height="62" rx="2" fill="#8c959f"/>
+  <text x="92" y="526" class="ui h mute">WORTH A LOOK</text>
+  <text x="92" y="556" class="ui name ink">Lena Okafor</text>
+  <text x="198" y="556" class="ui s mute">design-reviews · 10:31 · shared “Onboarding v3” and a status update</text>
+
+  <!-- no reply -->
+  <rect x="72" y="596" width="4" height="40" rx="2" fill="#d0d7de"/>
+  <text x="92" y="612" class="ui h faint">NO REPLY NEEDED</text>
+  <text x="92" y="634" class="ui s mute">4 messages: two thank-yous, a thumbs-up and an FYI.</text>
+
+  <text x="1128" y="634" text-anchor="end" class="ui s faint">Illustration · made-up names and messages</text>
+</svg>

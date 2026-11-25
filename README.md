@@ -1,46 +1,107 @@
-# gchat-mcp
+# google-chat-mcp
 
-Local stdio MCP server for Google Chat, using the GA Chat REST API under your own Google OAuth (no service account).
+Let your AI assistant read and answer Google Chat for you: what needs a reply, summaries, search, and drafts that
+are sent only when you approve them. It runs on your computer, under your own Google sign-in.
 
-## Requirements
-- A Google Workspace account (Business, Enterprise or Education) with Google Chat. The Chat API does not serve
-  personal `@gmail.com` accounts.
-- macOS or Linux (file locking and the `send_file` path checks use `fcntl` and `/proc`), Python 3.13+,
-  [uv](https://docs.astral.sh/uv/).
-- An MCP client, e.g. Claude Code, Codex CLI or any client that runs stdio servers.
+![An AI assistant answering "What needs a reply in Google Chat?" with two messages that need a reply, suggested drafts, one worth a look and four that need nothing (made-up names)](docs/hero.svg)
 
-## Setup from scratch
-You bring your own Google Cloud OAuth client; nothing is shared with the author.
+## Quick start
 
-1. **Google Cloud project.** Create one (or reuse one) in the [Cloud console](https://console.cloud.google.com/).
-2. **Enable the APIs:** Google Chat API and People API
-   (`gcloud services enable chat.googleapis.com people.googleapis.com`).
-3. **Configure the Chat app.** Chat API → Configuration: give it a name, an avatar URL and a description. Google
-   requires this even for user-authenticated calls. Interactive features can stay off.
-4. **OAuth consent screen** (Google Auth Platform → Branding / Audience). Choose **Internal** if your Workspace
-   admin lets you: only your organisation can sign in and the app needs no verification. With **External** in
-   *Testing*, add yourself as a test user; Google then expires the refresh token after 7 days, so you rerun
-   `gchat-mcp login` weekly.
-5. **OAuth client.** Clients → Create client → **Desktop app**. Download the JSON and save it as
-   `~/.config/gchat-mcp/client_secret.json` (`chmod 600`). Keep it out of the repo.
-6. **Install and sign in:**
+**You need:** a Google Workspace account (a work or school Google account; personal `@gmail.com` accounts cannot
+use the Chat API), a Mac or Linux computer, and about 10 minutes. You will click through 5 pages in Google Cloud
+once; nothing costs money.
+
+There are two ways to set it up. Both end in the same place.
+
+### Option 1: let your AI assistant set it up
+
+Copy the prompt below and paste it into your AI assistant (Claude Code, Claude Desktop, Cursor, Codex...). It
+installs everything, runs the setup, connects the server to itself and checks it works. It asks you only for what
+a person must do: the 5 Google Cloud pages, downloading one file, and signing in.
+
+[![Copy the setup prompt](https://img.shields.io/badge/Copy-setup_prompt-137333)](src/gchat_mcp/agent_prompt.md?plain=1)
+(or click the copy icon on the box below, or run `uvx --python 3.13 google-chat-mcp setup --agent-prompt`, which copies it for you)
+
+<!-- agent-prompt:start -->
+```text
+Please set up the Google Chat MCP server (`google-chat-mcp`) on this computer and connect it to you, the AI assistant I am talking to. I am new to this, so explain each thing I must do in one plain sentence.
+
+Rules for you:
+- Never ask me to paste a password, token, API key or the contents of a key file into this chat. Secrets stay in files on my computer; you only ever use their file paths.
+- Do not turn on anything that sends my data to a third party. The only such option is SubQ triage: leave it off unless I ask for it, and before you turn it on, show me what `uvx --python 3.13 google-chat-mcp setup --explain-subq` prints and wait for my "yes".
+- Do every step you can yourself. Give me only the steps that need me, one at a time, and wait until I say "done".
+- When a command fails, read its output: it says what to do next. Follow that before you try anything else.
+- Do not send, edit or delete any Google Chat message as a test.
+
+Steps:
+1. Check that `uvx` works (`uvx --version`). If it does not, install uv with `curl -LsSf https://astral.sh/uv/install.sh | sh` (macOS or Linux; on macOS `brew install uv` also works) and use the full path it prints if `uvx` is still not found. Windows is not supported: tell me and stop.
+2. Run `uvx --python 3.13 google-chat-mcp setup --check`. If it says "Ready", go to step 6.
+3. Run `uvx --python 3.13 google-chat-mcp setup --guide`. It prints 5 short steps that I do in my web browser in Google Cloud (each has a link, what to click, and what I should see when it worked). Give them to me one at a time, each with its one-line "What", the link, what to click and what I should see.
+4. When I say I downloaded the key file, find it yourself: it is usually the newest `~/Downloads/client_secret_*.json`. Tell me: "A Google sign-in page will open. Choose your work account and click Allow. If Google says the app is not verified, click Continue: it is your own app." Then run, with a command timeout of at least 10 minutes:
+   `uvx --python 3.13 google-chat-mcp setup --non-interactive --client-secret <that path>`
+   It copies the key file into `~/.config/gchat-mcp/` and waits for my sign-in. If the sign-in fails, tell me what the output says and wait for me before you run `uvx --python 3.13 google-chat-mcp login` again (it opens a new sign-in page).
+5. Run `uvx --python 3.13 google-chat-mcp setup --check` again. It must say "Ready". If it does not, do what it says.
+6. Run `uvx --python 3.13 google-chat-mcp setup --print-config` and add the server to yourself with the part for this assistant: run the `claude mcp add` command (Claude Code) or the `codex mcp add` command (Codex CLI); for Claude Desktop or Cursor, copy the config file first, then merge the JSON into it and keep every server already in it.
+7. Tell me to restart you (or open a new chat) so the new server loads, and to then ask "What needs a reply in Google Chat?". That question only reads messages.
+
+At the end, tell me in two or three lines what you did and anything still left for me.
+```
+<!-- agent-prompt:end -->
+
+The prompt never asks you to paste a password or key into the chat, and it tells the assistant to ask you before
+turning on anything that sends data to another company.
+
+### Option 2: set it up yourself
+
+1. **Install uv**, the tool that downloads and runs this server. Open the Terminal app and paste:
    ```sh
-   git clone https://github.com/ajmalaksar25/gchat-mcp && cd gchat-mcp
-   uv sync
-   uv run gchat-mcp login   # opens a browser once, listens on http://localhost:53682/
+   curl -LsSf https://astral.sh/uv/install.sh | sh
    ```
-   The token is saved to `~/.config/gchat-mcp/token.json` (mode 0600). Run `login` again after an upgrade that
-   adds scopes; the server never opens a browser itself and says when a login is needed.
-7. **Register the server with your client**, e.g. Claude Code:
+   It worked when `uvx --version` prints a version number (open a new Terminal window first).
+2. **Run the setup wizard:**
    ```sh
-   claude mcp add -s user gchat-local -- uv run --directory /path/to/gchat-mcp gchat-mcp
+   uvx --python 3.13 google-chat-mcp setup
    ```
-   Codex CLI (`~/.codex/config.toml`):
-   ```toml
-   [mcp_servers.gchat-local]
-   command = "uv"
-   args = ["run", "--directory", "/path/to/gchat-mcp", "gchat-mcp"]
-   ```
+   It walks you through each step below, opens each page for you, finds the downloaded file, signs you in and
+   checks the connection. At the end it prints the exact line or file to add to your AI assistant.
+
+![The setup wizard in a terminal: the last Google Cloud step, saving the key file, the sign-in, the Ready check and the Claude Code command (example output)](docs/setup-terminal.svg)
+
+![Setup in two parts: 5 steps in the Google Cloud console in your browser, then the setup command saves the key file, signs you in, checks the connection and prints the config for your assistant](docs/setup-flow.svg)
+
+The 5 Google Cloud steps, if you want to read them first (`uvx --python 3.13 google-chat-mcp setup --guide` prints them too):
+
+| Step | What it is | Open | Do | It worked when |
+|---|---|---|---|---|
+| 1. Create a project | A free folder in Google Cloud for this tool's sign-in settings | [projectcreate](https://console.cloud.google.com/projectcreate) | Name it `gchat-mcp`, click **Create**, and select it at the top of the page | The project name shows at the top |
+| 2. Turn on 2 APIs | Lets programs you sign in to read and send Chat messages and show names | [enable Chat + People API](https://console.cloud.google.com/flows/enableapi?apiid=chat.googleapis.com,people.googleapis.com) | Check the project, click **Next**, **Enable** | The page says the APIs are enabled |
+| 3. Name the Chat app | Google needs a name, icon and description before any program uses Chat | [Chat API configuration](https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat) | App name `gchat-mcp`; Avatar URL `https://developers.google.com/chat/images/quickstart-app-avatar.png`; Description `My assistant`; switch off *Interactive features* if shown; **Save** | "Saved" message |
+| 4. Sign-in screen | The page Google shows when you allow this tool | [Branding](https://console.cloud.google.com/auth/branding) | **Get started**; app name `gchat-mcp`; your email; Audience **Internal** (if greyed out: **External**, then add yourself under Audience > Test users); **Create** | Google Auth Platform overview page |
+| 5. Key file | A small file that tells Google which program asks for your sign-in | [Clients](https://console.cloud.google.com/auth/clients) | **Create client**, type **Desktop app**, **Create**, **Download JSON** | `client_secret_....json` is in Downloads |
+
+Then the wizard asks for that file, opens the Google sign-in (choose your work account and click **Allow**; if
+Google says the app is not verified, click **Continue**: it is your own app), and checks the connection:
+`Ready: signed in as you@yourcompany.com; 37 conversations found.`
+
+With an **External** sign-in screen in testing mode, Google ends the sign-in after 7 days; run
+`uvx --python 3.13 google-chat-mcp login` again when the assistant says so. **Internal** has no such limit.
+
+Every step also runs without questions, for scripts and assistants:
+`setup --non-interactive --client-secret PATH [--footer TEXT] [--subq-key-file PATH] [--skip-login] [--relogin]`,
+`setup --check` (one read-only call), `setup --guide`, `setup --print-config`, `setup --explain-subq`.
+
+### Requirements
+- Python 3.13+ (uv installs it for you), macOS or Linux (file locking and `send_file` path checks use `fcntl`
+  and `/proc`; Windows is not supported).
+- An MCP client: Claude Code, Claude Desktop, Codex CLI, Cursor, or any client that runs stdio servers.
+
+### From source
+```sh
+git clone https://github.com/ajmalaksar25/gchat-mcp && cd gchat-mcp
+uv sync
+uv run gchat-mcp setup
+claude mcp add -s user gchat -- uv run --directory "$PWD" gchat-mcp
+```
 
 ### Scopes requested by `login`
 | Scope | Used for |
