@@ -36,7 +36,8 @@ SPACE_PREFS = ("mute", "important")
 
 
 def empty() -> dict:
-    return {"version": VERSION, "reported": {}, "settings": {"quiet_hours": "", "tz": DEFAULT_TZ, "spaces": {}}}
+    return {"version": VERSION, "reported": {},
+            "settings": {"quiet_hours": "", "tz": DEFAULT_TZ, "spaces": {}, "footer": ""}}
 
 
 def user_key(user_id: str) -> str:
@@ -137,6 +138,8 @@ def _normalise(d) -> dict:
                 pass  # a bad stored value means no quiet hours, never a broken watch
         if isinstance(st.get("spaces"), dict):
             out["settings"]["spaces"] = {str(k): v for k, v in st["spaces"].items() if v in SPACE_PREFS}
+        if isinstance(st.get("footer"), str):
+            out["settings"]["footer"] = st["footer"]
     return out
 
 

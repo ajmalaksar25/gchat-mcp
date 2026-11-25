@@ -1,7 +1,10 @@
 """Write tools against a fake Chat API: what is called, what is refused before any call, what the read-back says."""
+import hashlib
+import os
+
 import pytest
 
-from gchat_mcp import auth, chat, server
+from gchat_mcp import auth, chat, safefile, server
 
 SP = "spaces/AAA"
 ME = "111"
@@ -408,10 +411,6 @@ def test_start_conversation_validates_input(fake, emails, name):
 
 
 # --- last review round: hard links and approval binding
-import hashlib
-import os
-
-from gchat_mcp import safefile
 
 
 def _stat(p):
@@ -494,3 +493,26 @@ def test_installed_hook_binds_the_approval_to_the_bytes_the_server_checks(fake, 
     f.write_text("HELLO")  # changed after approval
     with pytest.raises(ValueError, match="approved"):
         server.send_file(**approved)
+
+
+def test_reference_hook_footer_is_opt_in_and_not_doubled():
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+    hook = Path(__file__).resolve().parents[1] / "hooks" / "gchat-footer.py"
+    ev = {"tool_name": "mcp__gchat-local__send_message",
+          "tool_input": {"messageText": "hello", "conversation_id": "AAA"}}
+
+    def run(env_extra=None, text="hello"):
+        env = os.environ.copy()
+        env.pop("GCHAT_MCP_HOOK_FOOTER", None)
+        env.update(env_extra or {})
+        event = {"tool_name": ev["tool_name"], "tool_input": {**ev["tool_input"], "messageText": text}}
+        out = subprocess.run([sys.executable, str(hook)], input=json.dumps(event), capture_output=True,
+                             text=True, check=True, env=env).stdout
+        return json.loads(out)["hookSpecificOutput"]["updatedInput"]["messageText"]
+
+    assert run() == "hello"
+    assert run({"GCHAT_MCP_HOOK_FOOTER": "_hook_"}) == "hello\n\n_hook_"
+    assert run({"GCHAT_MCP_HOOK_FOOTER": "_hook_"}, "hello\n\n_hook_") == "hello\n\n_hook_"
