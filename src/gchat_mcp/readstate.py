@@ -9,17 +9,17 @@ GAP = timedelta(milliseconds=1)
 
 
 def parse_when(s: str, now: datetime | None = None) -> datetime:
-    """A moment from `HH:MM` (today, Asia/Kolkata) or an ISO-8601 date/datetime (naive = Asia/Kolkata)."""
+    """A moment from `HH:MM` (today, local time) or an ISO-8601 date/datetime (naive = local time)."""
     now = now or datetime.now(timezone.utc)
     s = s.strip()
     m = CLOCK_RE.match(s)
     if m:
-        d = now.astimezone(fmt.IST).replace(hour=int(m[1]), minute=int(m[2]), second=0, microsecond=0)
+        d = now.astimezone(fmt.LOCAL).replace(hour=int(m[1]), minute=int(m[2]), second=0, microsecond=0)
         if d > now:
-            raise ValueError(f"{s} today (Asia/Kolkata) is in the future: give a date and time.")
+            raise ValueError(f"{s} today ({fmt.LOCAL.key}) is in the future: give a date and time.")
         return d
     d = datetime.fromisoformat(s)
-    return d if d.tzinfo else d.replace(tzinfo=fmt.IST)
+    return d if d.tzinfo else d.replace(tzinfo=fmt.LOCAL)
 
 
 def stamp(dt: datetime) -> str:
