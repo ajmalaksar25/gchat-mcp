@@ -1,6 +1,6 @@
 """Optional message footer: configuration rules and the exact append/no-double behaviour."""
 ENV = "GCHAT_MCP_FOOTER"
-OFF_VALUES = {"", "off", "none"}
+OFF_VALUES = {"", "off"}
 
 
 def clean(raw: str | None) -> str:
