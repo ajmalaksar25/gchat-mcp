@@ -1,7 +1,7 @@
 from gchat_mcp import fmt
 
 ME = "111"
-NAMES = {"111": "Ajmal Aksar", "222": "Priya", "333": "Rahul"}
+NAMES = {"111": "Sam Rivera", "222": "Priya", "333": "Rahul"}
 
 
 def who(u):
@@ -35,7 +35,7 @@ def test_reply_quote_and_me_marker():
         "name": "spaces/AAA/messages/m1", "lastUpdateTime": "2026-10-29T08:00:00Z",
         "quotedMessageSnapshot": {"sender": "Riya Dhawan", "text": "can you check?"}})
     out = fmt.render_message(m, who, ME)
-    assert "**Ajmal Aksar (me)**: on it" in out
+    assert "**Sam Rivera (me)**: on it" in out
     assert "↩ replying to Riya Dhawan: can you check?" in out
 
 
@@ -72,13 +72,13 @@ def mention(me=ME):
 
 
 def test_space_mention_after_my_last_message_is_b():
-    msgs = [msg("1", "222", "q"), msg("2", ME, "a"), msg("3", "333", "@Ajmal thoughts?", annotations=mention())]
+    msgs = [msg("1", "222", "q"), msg("2", ME, "a"), msg("3", "333", "@Sam thoughts?", annotations=mention())]
     (reason, ctx), = fmt.reply_reasons(msgs, "SPACE", ME)
     assert reason == "b" and ctx[-1]["name"].endswith("/3")
 
 
 def test_space_mention_already_answered_is_not_flagged():
-    msgs = [msg("1", "333", "@Ajmal?", annotations=mention()), msg("2", ME, "done")]
+    msgs = [msg("1", "333", "@Sam?", annotations=mention()), msg("2", ME, "done")]
     assert fmt.reply_reasons(msgs, "SPACE", ME) == []
 
 
@@ -103,11 +103,11 @@ def test_uploaded_attachment_omits_signed_url():
 def test_reply_to_image_shows_quoted_attachment():
     m = msg("m10", "222", "what is this?", quotedMessageMetadata={
         "name": "spaces/AAA/messages/m1", "lastUpdateTime": "2026-10-29T08:00:00Z",
-        "quotedMessageSnapshot": {"sender": "Ajmal Aksar", "text": "",
+        "quotedMessageSnapshot": {"sender": "Sam Rivera", "text": "",
                                   "attachments": [{"contentName": "card.png", "contentType": "image/png",
                                                    "attachmentDataRef": {"resourceName": "R"}}]}})
     out = fmt.render_message(m, who, ME)
-    assert '↩ replying to Ajmal Aksar' in out
+    assert '↩ replying to Sam Rivera' in out
     assert 'card.png (image/png) → get_attachment("spaces/AAA/messages/m10", 0, quoted=true)' in out
 
 
@@ -116,7 +116,7 @@ def test_numbered_list_app_sender_and_private_viewer():
             privateMessageViewer={"name": "users/111"})
     m["sender"]["type"] = "BOT"
     out = fmt.render_message(m, who, ME)
-    assert "**Priya [app] (private, only Ajmal Aksar can see it)**" in out
+    assert "**Priya [app] (private, only Sam Rivera can see it)**" in out
     assert "1. Do this" in out and "2. Do that @Rahul" in out
 
 
@@ -125,7 +125,7 @@ def test_reactions_counts_then_names():
     assert "reactions: 👍 2" in fmt.render_message(m, who, ME)
     m["_reactions"] = [{"emoji": {"unicode": "👍"}, "user": {"name": "users/333"}},
                        {"emoji": {"unicode": "👍"}, "user": {"name": "users/111"}}]
-    assert "reactions: 👍 Rahul, Ajmal Aksar (me)" in fmt.render_message(m, who, ME)
+    assert "reactions: 👍 Rahul, Sam Rivera (me)" in fmt.render_message(m, who, ME)
 
 
 def test_short_message_id_follows_the_time_on_the_first_line():
