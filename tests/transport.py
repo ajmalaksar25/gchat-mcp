@@ -2,7 +2,6 @@
 URL building, query params, JSON/binary bodies, error-body parsing, pagination and server-side rewriting."""
 import json
 import re
-import threading
 import time
 
 from datetime import datetime
@@ -95,7 +94,7 @@ class ChatServer:
         if path == "v1/spaces:setup":
             return reply(200, {"name": "spaces/NEW", "spaceType": js["space"]["spaceType"], "displayName": js["space"].get("displayName", "")})
         if path.endswith("oauth2/v2/userinfo"):
-            return reply(200, {"id": ME, "email": "ajmal@x.com"})
+            return reply(200, {"id": ME, "email": "sam@x.com"})
         if path.startswith("upload/v1/") and path.endswith("attachments:upload"):
             return reply(200, {"attachmentDataRef": {"attachmentUploadToken": "tok-1", "resourceName": "r"}})
         m = re.match(r"v1/(spaces/[^/]+)/messages$", path)

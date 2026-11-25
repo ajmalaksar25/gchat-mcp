@@ -5,7 +5,7 @@ from gchat_mcp import auth, chat, server
 
 SP = "spaces/AAA"
 ME = "111"
-PEOPLE = {"111": ("Ajmal", "ajmal@x.com"), "222": ("Priya Shah", "priya@x.com"), "333": ("Priya Nair", "priya.n@x.com")}
+PEOPLE = {"111": ("Sam", "sam@x.com"), "222": ("Priya Shah", "priya@x.com"), "333": ("Priya Nair", "priya.n@x.com")}
 
 
 class Fake:
@@ -69,7 +69,7 @@ def fake(monkeypatch):
     for n in ("post", "patch", "delete", "get"):
         monkeypatch.setattr(chat, n, getattr(f, n))
     monkeypatch.setattr(chat, "me_id", lambda: ME)
-    monkeypatch.setattr(chat, "me_email", lambda: "ajmal@x.com")
+    monkeypatch.setattr(chat, "me_email", lambda: "sam@x.com")
     monkeypatch.setattr(chat, "who", lambda u: PEOPLE.get(chat.fmt.uid(u), ("Unknown",))[0] if not (isinstance(u, dict) and u.get("displayName")) else u["displayName"])
     monkeypatch.setattr(chat, "label", lambda s: s.get("displayName", "x"))
     monkeypatch.setattr(chat, "person", lambda u: dict(zip(("name", "email"), PEOPLE.get(chat.fmt.uid(u), ("Unknown", "")))))
@@ -113,7 +113,7 @@ def test_missing_annotation_in_read_back_is_flagged(fake):
 
 def test_plain_send_still_reports_sender(fake):
     out = server.send_message("AAA", "hello")
-    assert "Sender: Ajmal (HUMAN, me)" in out and "Mentions" not in out
+    assert "Sender: Sam (HUMAN, me)" in out and "Mentions" not in out
 
 
 def test_scope_403_on_send_has_the_login_hint(fake, monkeypatch):
