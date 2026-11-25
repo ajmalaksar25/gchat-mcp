@@ -1,6 +1,6 @@
 [project]
 name = "google-chat-mcp"
-version = "0.2.0"
+version = "0.3.0"
 description = "Local stdio MCP server for Google Chat (user OAuth, GA REST API)"
 readme = "README.md"
 license = "MIT"
