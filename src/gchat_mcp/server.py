@@ -529,7 +529,8 @@ def _outgoing_text(space: str, text: str) -> tuple[str, list[str], bool]:
     """Mention-resolved text plus the configured footer; the original ending is checked before mention markup
     rewrites it, so a footer already added by a client hook is never duplicated."""
     footer = _footer()
-    already_has_footer = bool(footer and text.rstrip().endswith(footer))
+    stripped = text.rstrip()
+    already_has_footer = bool(footer) and (stripped == footer or stripped.endswith("\n\n" + footer))
     rewritten, want = _mentions(space, text)
     if already_has_footer:
         return rewritten, want, False
