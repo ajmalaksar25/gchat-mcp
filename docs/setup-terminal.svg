@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="612" viewBox="0 0 1200 612" role="img" aria-labelledby="t">
+<title id="t">The setup wizard in a terminal: the last Google Cloud step, saving the key file, the sign-in, the Ready check and the Claude Code command (example output, made-up email)</title>
+<style>.m{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:15px}</style>
+<rect width="1200" height="612" rx="14" fill="#0d1117"/>
+<path d="M0 14a14 14 0 0 1 14-14h1172a14 14 0 0 1 14 14v26H0z" fill="#161b22"/>
+<circle cx="24" cy="20" r="6" fill="#30363d"/><circle cx="44" cy="20" r="6" fill="#30363d"/><circle cx="64" cy="20" r="6" fill="#30363d"/>
+<text x="600" y="25" text-anchor="middle" class="m" fill="#8b949e" font-size="13">Terminal · example output, made-up email</text>
+<text x="28" y="78" class="m" fill="#e6edf3" font-weight="600" xml:space="preserve">$ uvx --python 3.13 google-chat-mcp setup</text>
+<text x="28" y="126" class="m" fill="#e6edf3" font-weight="600" xml:space="preserve">Step 5 of 5: Create and download the key file (OAuth client)</text>
+<text x="28" y="150" class="m" fill="#c9d1d9" xml:space="preserve">  What: This small file tells Google which program asks for your sign-in. It stays on your computer.</text>
+<text x="28" y="174" class="m" fill="#c9d1d9" xml:space="preserve">  Open: https://console.cloud.google.com/auth/clients</text>
+<text x="28" y="198" class="m" fill="#c9d1d9" xml:space="preserve">  Do:   Click Create client. Application type: Desktop app. Name: gchat-mcp. Click Create, then Download JSON.</text>
+<text x="28" y="222" class="m" fill="#c9d1d9" xml:space="preserve">  Done when: A file named client_secret_....json is in your Downloads folder.</text>
+<text x="28" y="246" class="m" fill="#8b949e" xml:space="preserve">  Press Enter when it worked.</text>
+<text x="28" y="294" class="m" fill="#e6edf3" xml:space="preserve">Use the key file ~/Downloads/client_secret_123-abc.apps.googleusercontent.com.json? [Y/n]</text>
+<text x="28" y="318" class="m" fill="#c9d1d9" xml:space="preserve">Key file: saved to ~/.config/gchat-mcp/client_secret.json (only you can read it).</text>
+<text x="28" y="366" class="m" fill="#c9d1d9" xml:space="preserve">Sign-in: a Google page opens in your browser. Choose your work account and click Allow.</text>
+<text x="28" y="390" class="m" fill="#c9d1d9" xml:space="preserve">  If Google says the app is not verified, click Continue: it is your own app.</text>
+<text x="28" y="414" class="m" fill="#c9d1d9" xml:space="preserve">Saved token to ~/.config/gchat-mcp/token.json</text>
+<text x="28" y="462" class="m" fill="#7ee2a8" font-weight="600" xml:space="preserve">Ready: signed in as you@yourcompany.com; 37 conversations found.</text>
+<text x="28" y="510" class="m" fill="#e6edf3" font-weight="600" xml:space="preserve">Last step: add the server to your AI assistant.</text>
+<text x="28" y="534" class="m" fill="#c9d1d9" xml:space="preserve">Claude Code (run in a terminal):</text>
+<text x="28" y="558" class="m" fill="#e6edf3" font-weight="600" xml:space="preserve">  claude mcp add -s user gchat -- uvx --python 3.13 google-chat-mcp</text>
+</svg>

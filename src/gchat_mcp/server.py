@@ -1278,6 +1278,9 @@ def inbox_settings(quiet_hours: str = "", timezone_name: str = "", mute: list[st
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "login":
         auth.login()
+    elif len(sys.argv) > 1 and sys.argv[1] == "setup":
+        from . import setup
+        sys.exit(setup.main(sys.argv[2:]))
     elif len(sys.argv) > 1 and sys.argv[1] == "watch":
         from . import watch
         sys.exit(watch.main(sys.argv[2:]))
