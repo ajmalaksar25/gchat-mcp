@@ -14,7 +14,7 @@ from . import triage
 URL = "https://api.subq.ai/v1/systemone"
 MODEL = "subq-snap-1.2"
 MIN_CONFIDENCE = 0.7  # below this the item is left for the client to classify
-TIMEOUT = (5, 30)  # connect, read (seconds); a slow Snap leaves items unclassified, never blocks triage
+TIMEOUT = (5, 12)  # connect, read (seconds); a slow Snap leaves items unclassified, never blocks triage
 MAX_QUESTIONS = 128  # the API's limit per request
 KEY_FILE = Path.home() / ".config" / "gchat-mcp" / "subq_key"
 CRITERIA = {

@@ -13,7 +13,7 @@ import anyio
 from . import auth, server
 
 KINDS = ("reply_needed", "worth_a_look", "no_reply_needed", "unclassified")
-BACKOFF_MAX = 900  # seconds; longest wait after repeated API errors
+BACKOFF_MAX = 30  # seconds; longest wait after repeated API errors (blips are short; a late message costs more)
 TEXT_CAP = 160
 
 
@@ -43,7 +43,7 @@ async def run(only: set[str], poll: int, since: str = "", min_age: int = 0, poll
             return 2
         except Exception as e:  # Chat or network error: back off and keep watching
             fails += 1
-            wait = min(poll * 2 ** fails, BACKOFF_MAX)
+            wait = min(5 * fails, BACKOFF_MAX)
             print(f"gchat-mcp watch: {type(e).__name__}: {str(e)[:200]}; retrying in {wait} s",
                   file=sys.stderr, flush=True)
             await anyio.sleep(wait)
