@@ -32,6 +32,22 @@ class AuthError(RuntimeError):
     pass
 
 
+# Remote mode (`gchat-mcp serve`) installs a source that returns the calling user's Google credentials for the
+# current HTTP request; the local token file is then never read.
+_remote_source = None
+_relogin = "run `gchat-mcp login`"
+
+
+def set_remote_source(source, relogin: str) -> None:
+    global _remote_source, _relogin
+    _remote_source, _relogin = source, relogin
+
+
+def relogin_hint() -> str:
+    """The next step that grants missing scopes or a fresh sign-in, for this mode."""
+    return _relogin
+
+
 def _save(creds: Credentials) -> None:
     DIR.mkdir(parents=True, exist_ok=True)
     fd = os.open(TOKEN, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -45,6 +61,8 @@ def credentials() -> Credentials:
 
     Never opens a browser. Every Google call gets its credentials here and nowhere else.
     """
+    if _remote_source is not None:
+        return _remote_source()
     if not TOKEN.exists():
         raise AuthError("Google Chat is not authorised: run `gchat-mcp login` in a terminal.")
     # Keep the token's own granted scopes: refreshing with an ungranted scope fails and would break reads.

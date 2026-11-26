@@ -4,6 +4,16 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+### Added
+- Remote mode: `gchat-mcp serve` (extra `remote`) serves the tools over Streamable HTTP with OAuth 2.1 (dynamic
+  client registration, PKCE, refresh, revocation) and Google sign-in per user, so the server can be added to
+  Claude as a custom connector. Stateless: every token is an encrypted blob, no database. Allowlist of users or
+  domains, limited redirect URIs, `/healthz`, a `Dockerfile` and Cloud Run steps in `docs/remote.md`.
+
+### Changed
+- Tools run in a worker thread, so a slow Google call no longer blocks the event loop.
+- DM and group-chat labels are cached per signed-in user.
+- Needs `mcp>=1.30`.
 
 ## [0.3.0] - 2026-11-26
 ### Added

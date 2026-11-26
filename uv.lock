@@ -352,6 +352,12 @@ dependencies = [
     { name = "requests" },
 ]
 
+[package.optional-dependencies]
+remote = [
+    { name = "cryptography" },
+    { name = "uvicorn" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
@@ -360,11 +366,14 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", marker = "extra == 'remote'", specifier = ">=43" },
     { name = "google-auth", specifier = ">=2.30" },
     { name = "google-auth-oauthlib", specifier = ">=1.2" },
-    { name = "mcp", specifier = ">=1.12,<2" },
+    { name = "mcp", specifier = ">=1.30,<2" },
     { name = "requests", specifier = ">=2.32" },
+    { name = "uvicorn", marker = "extra == 'remote'", specifier = ">=0.30" },
 ]
+provides-extras = ["remote"]
 
 [package.metadata.requires-dev]
 dev = [
