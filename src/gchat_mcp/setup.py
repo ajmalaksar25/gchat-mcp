@@ -162,18 +162,65 @@ def server_command(which=shutil.which, here: Path = Path(__file__).resolve(), pr
     return [uvx, *UVX] if uvx else [str(Path(sys.argv[0]).resolve())]
 
 
-def configs(cmd: list[str], which=shutil.which) -> str:
-    """Ready-to-paste config for Claude Code, Codex CLI, Claude Desktop and Cursor."""
+# Where the person uses their assistant: key, menu label. `claude-web` needs the hosted server (docs/remote.md).
+APPS = {
+    "claude-code": "Claude Code (in a terminal)",
+    "claude-desktop": "Claude Desktop app",
+    "claude-web": "Claude on the web or phone (claude.ai)",
+    "codex": "Codex CLI",
+    "cursor": "Cursor",
+    "other": "Another MCP app",
+}
+REMOTE_DOC = "https://github.com/ajmalaksar25/gchat-mcp/blob/main/docs/remote.md"
+
+
+def parse_apps(text: str) -> list[str]:
+    """Keys from a comma-separated `--for` value (or 'all'); ValueError names the valid ones."""
+    keys = [k.strip().lower() for k in text.split(",") if k.strip()]
+    if not keys or keys == ["all"]:
+        return list(APPS)
+    bad = [k for k in keys if k not in APPS]
+    if bad:
+        raise ValueError(f"unknown app {', '.join(bad)}; use {', '.join(APPS)} or all")
+    return list(dict.fromkeys(keys))
+
+
+def choose_apps() -> list[str]:
+    print("\nWhere will you use it? (one or more)")
+    for n, label in enumerate(APPS.values(), 1):
+        print(f"  {n}. {label}")
+    while True:
+        got = input("Type the numbers, separated by commas (Enter for all): ").strip()
+        if not got:
+            return list(APPS)
+        nums = [x for x in got.replace(" ", "").split(",") if x]
+        if nums and all(x.isdigit() and 1 <= int(x) <= len(APPS) for x in nums):
+            return list(dict.fromkeys(list(APPS)[int(x) - 1] for x in nums))
+        print(f"  Type numbers from 1 to {len(APPS)}, like 1,3.")
+
+
+def configs(cmd: list[str], which=shutil.which, apps: list[str] | None = None) -> str:
+    """Ready-to-paste setup for each app in `apps` (default: all)."""
     head = Path(cmd[0]).name if which(Path(cmd[0]).name) == cmd[0] else cmd[0]  # short name only if PATH finds it
     short = shlex.join([head, *cmd[1:]])
     entry = json.dumps({"mcpServers": {NAME: {"command": cmd[0], "args": cmd[1:]}}}, indent=2)
     desktop = ("~/Library/Application Support/Claude/claude_desktop_config.json" if platform.system() == "Darwin"
                else "~/.config/Claude/claude_desktop_config.json")
-    return "\n".join([
-        "Claude Code (run in a terminal):", f"  claude mcp add -s user {NAME} -- {short}", "",
-        "Codex CLI (run in a terminal):", f"  codex mcp add {NAME} -- {short}", "",
-        f"Claude Desktop: merge into {desktop} (Settings > Developer > Edit Config), then restart it:", entry, "",
-        "Cursor: merge into ~/.cursor/mcp.json (Settings > MCP > Add new server), then restart it:", entry])
+    parts = {
+        "claude-code": ["Claude Code (run in a terminal):", f"  claude mcp add -s user {NAME} -- {short}"],
+        "claude-desktop": [f"Claude Desktop: merge into {desktop} (Settings > Developer > Edit Config), then "
+                           "restart it:", entry],
+        "claude-web": ["Claude on the web or phone (claude.ai): it connects by URL, so it needs a hosted copy of "
+                       "this server.", "  Google Cloud Run runs one inside its free tier for personal or small-team "
+                       "use; the project needs a billing account (a card) attached.",
+                       f"  Steps: {REMOTE_DOC}", "  The Claude Desktop app can use this computer's server instead "
+                       "(no hosting)."],
+        "codex": ["Codex CLI (run in a terminal):", f"  codex mcp add {NAME} -- {short}"],
+        "cursor": ["Cursor: merge into ~/.cursor/mcp.json (Settings > MCP > Add new server), then restart it:", entry],
+        "other": ["Another MCP app: add a local (stdio) server named " + NAME + " that runs this command:",
+                  f"  {shlex.join(cmd)}", "  Most apps take it as this JSON:", entry],
+    }
+    return "\n\n".join("\n".join(parts[k]) for k in (apps or list(APPS)))
 
 
 def explain_api_error(e) -> str:
@@ -226,7 +273,9 @@ def parser() -> argparse.ArgumentParser:
     a = p.add_argument
     a("--guide", action="store_true", help="print the 5 Google Cloud steps and exit")
     a("--check", action="store_true", help="test the sign-in with one read-only call and exit")
-    a("--print-config", action="store_true", help="print the config for Claude Code, Codex, Claude Desktop, Cursor")
+    a("--print-config", action="store_true", help="print how to add the server to each app (see --for)")
+    a("--for", dest="apps", metavar="APPS", help=f"comma-separated apps to show setup for: {', '.join(APPS)}, or "
+                                                  "all (default: ask, or all without a terminal)")
     a("--agent-prompt", action="store_true", help="print the setup prompt for an AI assistant and copy it")
     a("--explain-subq", action="store_true", help="print what SubQ receives and keeps, and exit")
     a("--gcloud", action="store_true", help="do steps 1-2 (project, APIs) with the gcloud CLI, then show steps 3-5")
@@ -386,7 +435,12 @@ def named(text: str) -> str:
 
 def main(argv: list[str]) -> int:
     sys.stdout.reconfigure(line_buffering=True)  # keep progress and errors in order when output is piped
-    args = parser().parse_args(argv)
+    p = parser()
+    args = p.parse_args(argv)
+    try:
+        apps = parse_apps(args.apps) if args.apps else None
+    except ValueError as e:
+        p.error(f"--for: {e}")
     if args.agent_prompt:
         text = prompt_text()
         print(text)
@@ -404,7 +458,7 @@ def main(argv: list[str]) -> int:
         print(named("\nThen run: `gchat-mcp setup --client-secret <path to the downloaded file>`"))
         return 0
     if args.print_config:
-        print(configs(server_command()))
+        print(configs(server_command(), apps=apps))
         return 0
     try:
         if not args.check:
@@ -422,6 +476,8 @@ def main(argv: list[str]) -> int:
         print(named(f"\nNot ready: {e.code}"))  # stdout, so it follows the progress lines in a captured log
         return 1
     if not args.check:
-        print("\nLast step: add the server to your AI assistant.\n\n" + configs(server_command())
+        if apps is None and interactive:
+            apps = choose_apps()
+        print("\nLast step: add the server to your AI assistant.\n\n" + configs(server_command(), apps=apps)
               + "\n\nThen restart the assistant and ask it: What needs a reply in Google Chat?")
     return 0

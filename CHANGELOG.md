@@ -10,6 +10,9 @@ and versions follow [Semantic Versioning](https://semver.org/).
   gcloud is signed in. The project id is remembered, so a rerun reuses it. A personal Gmail account or an expired
   gcloud sign-in stops before any change, with the command to fix it.
 - `setup --guide` links select the remembered project.
+- `setup --for claude-code,claude-desktop,claude-web,codex,cursor,other` (and a menu in the wizard): prints only
+  the setup for the apps you use. `claude-web` explains the hosted (Cloud Run) option; `other` gives the generic
+  command and JSON. The assistant prompt asks where you will use it, with these presets.
 - README: team setup (one shared key file from an Internal project, each person signs in as themselves), and the
   assistant prompt asks about a shared key file first and uses gcloud when it is there.
 
