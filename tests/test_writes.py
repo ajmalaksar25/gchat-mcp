@@ -582,3 +582,8 @@ def test_hook_delete_always_asks_and_always_mode_asks_every_time(tmp_path):
 def test_hook_skips_its_footer_when_the_call_says_footer_false(tmp_path):
     out = hook(send(mode="default", footer=False), tmp_path, GCHAT_MCP_HOOK_FOOTER="_f_")
     assert out is None
+
+
+def test_hook_marks_the_footer_it_added(tmp_path):
+    out = hook(send(mode="default"), tmp_path, GCHAT_MCP_HOOK_FOOTER="_f_")
+    assert out["updatedInput"]["client_footer"] == "_f_" and out["updatedInput"]["messageText"].endswith("_f_")
