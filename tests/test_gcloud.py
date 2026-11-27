@@ -144,3 +144,33 @@ def test_wizard_falls_back_to_the_browser_when_gcloud_cannot_help(home, fake, mo
     assert setup.cloud(args, interactive=True) == 0
     assert says in capsys.readouterr().out
     assert not any(c[:2] in (["projects", "create"], ["services", "enable"]) for c in fake.calls)
+
+
+def test_a_stale_remembered_project_is_replaced(home, capsys):
+    gcloud.PROJECT_FILE.write_text("gchat-mcp-gone11\n")
+    project, created = gcloud.ensure_project(gc=FakeGcloud())
+    assert created and project != "gchat-mcp-gone11" and gcloud.remembered() == project
+    assert "gchat-mcp-gone11" in capsys.readouterr().out
+
+
+def test_explicit_gcloud_runs_even_with_a_key_file(home, fake, monkeypatch, capsys):
+    (home / "client_secret.json").write_text('{"installed": {"client_id": "x"}}')
+    monkeypatch.setattr(setup, "check", lambda: "Ready: test")
+    assert setup.main(["--gcloud", "--non-interactive", "--skip-login"]) == 0
+    assert "(gcloud)" in capsys.readouterr().out and any(c[:2] == ["services", "enable"] for c in fake.calls)
+
+
+def test_guide_with_a_project_does_not_ask_to_create_one(home, capsys):
+    assert setup.main(["--guide", "--project", "team-chat-1"]) == 0
+    out = capsys.readouterr().out
+    assert "Already done: this setup uses project team-chat-1" in out and "projectcreate" not in out
+
+
+def test_wizard_fallback_keeps_the_prepared_project(home, fake, monkeypatch, capsys):
+    def enable_fails(*a, **k):
+        raise gcloud.Failed("services enable: permission denied")
+    monkeypatch.setattr(gcloud, "enable_apis", enable_fails)
+    monkeypatch.setattr(setup, "ask", lambda q, d: True)
+    args = setup.parser().parse_args([])
+    assert setup.cloud(args, interactive=True) == 1  # browser picks up at step 2
+    assert args.project == gcloud.remembered() and "from step 2" in capsys.readouterr().out

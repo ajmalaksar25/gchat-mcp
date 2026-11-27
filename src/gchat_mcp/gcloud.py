@@ -94,13 +94,19 @@ def exists(project: str, gc=None) -> bool:
 def ensure_project(project: str = "", gc=None) -> tuple[str, bool]:
     """(project id, created now). Uses `project`, else the remembered one, else creates a new project."""
     gc = gc or run
-    project = project or remembered()
+    saved = "" if project else remembered()
+    if saved and not exists(saved, gc):  # deleted, or another gcloud account: forget it and make a new one
+        print(f"The project setup used before ({saved}) is gone or this gcloud account cannot see it; "
+              "creating a new one.")
+        PROJECT_FILE.unlink(missing_ok=True)
+        saved = ""
+    project = project or saved
     if project:
         if not PROJECT_RE.match(project):
             raise Failed(f"{project!r} is not a Google Cloud project id (6-30 lowercase letters, digits, hyphens).")
         if not exists(project, gc):
             raise Failed(f"Project {project} does not exist or this gcloud account cannot see it. Check the id with "
-                         "`gcloud projects list`, or leave out --project to create a new one.")
+                         "`gcloud projects list`, or leave out --project to use a new one.")
         created = False
     else:
         project = new_id()

@@ -258,11 +258,17 @@ def ask(question: str, default: bool) -> bool:
 def show(step: int, interactive: bool, project: str = "") -> None:
     title, what, url, click, success = GUIDE[step]
     url = gcloud.with_project(url, project)
-    if project and step >= 2:
+    if project and step == 0:
+        what, url = f"Already done: this setup uses project {project}.", ""
+        click, success = "Nothing to do in this step.", "-"
+    elif project and step >= 2:
         click = f"Check that project {project} is selected at the top of the page. " + click
-    print(f"\nStep {step + 1} of {len(GUIDE)}: {title}\n  What: {what}\n  Open: {url}\n  Do:   {click}\n"
-          f"  Done when: {success}")
-    if interactive:
+    if not url:
+        print(f"\nStep {step + 1} of {len(GUIDE)}: {title}\n  {what} {click}")
+    else:
+        print(f"\nStep {step + 1} of {len(GUIDE)}: {title}\n  What: {what}\n  Open: {url}\n  Do:   {click}\n"
+              f"  Done when: {success}")
+    if interactive and url:
         if input("  Press Enter to open the page, or type 'skip' if you already did this: ").strip() != "skip":
             webbrowser.open(url)
             input("  Press Enter when it worked. ")
@@ -324,6 +330,7 @@ def cloud(args, interactive: bool) -> int:
         if not ask(f"\ngcloud is signed in as {who}. Use it to create the project and turn on the APIs "
                    "(steps 1 and 2)?", True):
             return 0
+    project = ""
     try:
         gcloud.check_account(who)
         gcloud.check_token()
@@ -333,6 +340,10 @@ def cloud(args, interactive: bool) -> int:
     except gcloud.Failed as e:
         if args.gcloud:
             raise
+        if project:  # the project is ready; only the APIs are left for the browser, in that project
+            args.project = project
+            print(f"\ngcloud could not turn on the APIs: {e.code}\nCarrying on in the browser from step 2.")
+            return 1
         print(f"\ngcloud could not do steps 1 and 2: {e.code}\nCarrying on with all 5 steps in the browser.")
         return 0
     print(f"Step 2 of {len(GUIDE)}: {', '.join(turned_on) or 'Chat and People APIs'} "
@@ -463,7 +474,8 @@ def main(argv: list[str]) -> int:
     try:
         if not args.check:
             interactive = not args.non_interactive and sys.stdin.isatty()
-            first = cloud(args, interactive) if not args.client_secret and not auth.CLIENT.exists() else 0
+            # an explicit --gcloud always runs; otherwise only a first run (no key file yet) offers it
+            first = cloud(args, interactive) if args.gcloud or not (args.client_secret or auth.CLIENT.exists()) else 0
             get_client(args, interactive, first)
             sign_in(args, interactive)
             if args.skip_login and args.relogin and args.footer is not None:
