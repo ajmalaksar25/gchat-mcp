@@ -4,7 +4,8 @@ When on, each tool call sends one `$mcp_tool_call` event to the PostHog project 
 long it took, whether it failed and the error type, and the client and model names. Tool arguments, results and
 error messages (which can carry message text, names and ids) are removed before anything is sent. No `context`
 argument is added to the tools: PostHog would make it required, which breaks clients that do not send it.
-Events are tied to the signed-in Google account's email, so the project owner can tell people apart.
+Events are tied to the signed-in Google account's email, so the project owner can tell people apart, and carry
+`deployment` ("local" for stdio, "hosted" for remote mode).
 """
 import os
 import sys
@@ -22,12 +23,17 @@ def key() -> str:
     return "" if k.lower() in ("", "off") else k
 
 
+DEPLOYMENTS = ("local", "hosted")
+_deployment = "local"  # set by enable(): "local" (stdio) or "hosted" (remote mode, `gchat-mcp serve`)
+
+
 def before_send(event: dict) -> dict | None:
     props = event.get("properties")
     if not isinstance(props, dict):
         return None  # an event shape this code does not know is dropped, never sent unfiltered
     for k in DROP:
         props.pop(k, None)
+    props["deployment"] = _deployment  # tells the stdio server and a hosted one apart (same server name)
     return event
 
 
@@ -52,8 +58,13 @@ def _version() -> str:
         return "dev"
 
 
-def enable(server):
-    """Instrument `server` when a key is set; returns the PostHog client (call `.shutdown()` on exit) or None."""
+def enable(server, deployment: str = "local"):
+    """Instrument `server` when a key is set; returns the PostHog client (call `.shutdown()` on exit) or None.
+    `deployment` ("local" for stdio, "hosted" for remote mode) goes on every event as the `deployment` property."""
+    global _deployment
+    if deployment not in DEPLOYMENTS:
+        raise ValueError(f"deployment must be one of {DEPLOYMENTS}")
+    _deployment = deployment
     k = key()
     if not k:
         return None

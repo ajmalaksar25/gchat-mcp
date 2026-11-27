@@ -5,6 +5,7 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 ### Added
+- Analytics events carry `deployment` (`local` for stdio, `hosted` for remote mode).
 - `send_message(quote_message_id=...)`: reply to one specific message by quoting it; a quoted thread reply goes
   into the same thread. The read-back confirms the quote.
 - A bare `@Full Name` that is exactly a member's name becomes a real mention; any other bare `@Word` is refused

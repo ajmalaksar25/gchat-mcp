@@ -225,7 +225,8 @@ claude mcp add -s user -e GCHAT_MCP_POSTHOG_KEY=phc_... gchat -- uvx --python 3.
 # from a checkout: uv sync --extra analytics, then run as usual with the variable set
 ```
 - Sent per tool call: `$mcp_tool_call` with the tool name, duration, `$mcp_is_error` and the error type, and the
-  client and model names. Events are tied to the signed-in Google account's email. Also `$mcp_initialize` and
+  client and model names, and `deployment` (`local` for stdio, `hosted` for remote mode). Events are tied to the
+  signed-in Google account's email. Also `$mcp_initialize` and
   `$mcp_tools_list`. Tools keep their schemas (no `context` argument is added, so there is no `$mcp_intent`).
 - Never sent: tool arguments (`$mcp_parameters`), results (`$mcp_response`) and error messages
   (`$mcp_error_message`), so no message text, names or conversation ids. Exception autocapture is off.
