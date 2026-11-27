@@ -1428,7 +1428,7 @@ def main() -> None:
         sys.exit(watch.main(sys.argv[2:]))
     else:
         from . import analytics
-        ph = analytics.enable(mcp)
+        ph = analytics.enable(mcp, deployment="local")
         try:
             mcp.run()
         finally:
