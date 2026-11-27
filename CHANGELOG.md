@@ -4,6 +4,14 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+### Added
+- `gchat-mcp setup --gcloud [--project ID]`: the gcloud CLI creates the project and turns on the Chat and People
+  APIs (steps 1-2); steps 3-5 open with that project already selected. The interactive wizard offers it when
+  gcloud is signed in. The project id is remembered, so a rerun reuses it. A personal Gmail account or an expired
+  gcloud sign-in stops before any change, with the command to fix it.
+- `setup --guide` links select the remembered project.
+- README: team setup (one shared key file from an Internal project, each person signs in as themselves), and the
+  assistant prompt asks about a shared key file first and uses gcloud when it is there.
 
 ## [0.3.0] - 2026-11-26
 ### Added

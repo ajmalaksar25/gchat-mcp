@@ -16,7 +16,7 @@ import webbrowser
 from importlib import resources
 from pathlib import Path
 
-from . import auth
+from . import auth, gcloud
 
 C = "https://console.cloud.google.com"
 AVATAR = "https://developers.google.com/chat/images/quickstart-app-avatar.png"
@@ -208,8 +208,11 @@ def ask(question: str, default: bool) -> bool:
     return default if not got else got.startswith("y")
 
 
-def show(step: int, interactive: bool) -> None:
+def show(step: int, interactive: bool, project: str = "") -> None:
     title, what, url, click, success = GUIDE[step]
+    url = gcloud.with_project(url, project)
+    if project and step >= 2:
+        click = f"Check that project {project} is selected at the top of the page. " + click
     print(f"\nStep {step + 1} of {len(GUIDE)}: {title}\n  What: {what}\n  Open: {url}\n  Do:   {click}\n"
           f"  Done when: {success}")
     if interactive:
@@ -226,6 +229,9 @@ def parser() -> argparse.ArgumentParser:
     a("--print-config", action="store_true", help="print the config for Claude Code, Codex, Claude Desktop, Cursor")
     a("--agent-prompt", action="store_true", help="print the setup prompt for an AI assistant and copy it")
     a("--explain-subq", action="store_true", help="print what SubQ receives and keeps, and exit")
+    a("--gcloud", action="store_true", help="do steps 1-2 (project, APIs) with the gcloud CLI, then show steps 3-5")
+    a("--project", metavar="ID", help="with --gcloud or --guide: use this Google Cloud project (default: the one "
+                                       "setup made before, else a new one)")
     a("--non-interactive", action="store_true", help="never prompt; use only the flags below")
     a("--client-secret", metavar="PATH", help="the downloaded client_secret_....json")
     a("--skip-login", action="store_true", help="do not open the Google sign-in")
@@ -248,20 +254,46 @@ def save_footer(text: str) -> str:
     return f"Footer: {value}" if value else "Footer: off"
 
 
-def get_client(args, interactive: bool) -> None:
+def cloud(args, interactive: bool) -> int:
+    """Steps 1-2 through gcloud when asked (or offered and accepted). Returns the first guide step still to do."""
+    use = args.gcloud
+    if not use and interactive and gcloud.available():
+        who = gcloud.account()
+        use = bool(who) and ask(f"\ngcloud is signed in as {who}. Use it to create the project and turn on the APIs "
+                                "(steps 1 and 2)?", True)
+    if not use:
+        return 0
+    gcloud.check_account(gcloud.account())
+    gcloud.check_token()
+    project, created = gcloud.ensure_project(args.project or "")
+    print(f"\nStep 1 of {len(GUIDE)}: project {project} {'created' if created else 'in use'} (gcloud).")
+    turned_on = gcloud.enable_apis(project)
+    print(f"Step 2 of {len(GUIDE)}: {', '.join(turned_on) or 'Chat and People APIs'} "
+          f"{'turned on' if turned_on else 'already on'} (gcloud).")
+    args.project = project
+    return 2
+
+
+def get_client(args, interactive: bool, first: int = 0) -> None:
     if args.client_secret:
         src = clean_path(args.client_secret)
     elif auth.CLIENT.exists():
         print(f"\nKey file: already in place ({auth.CLIENT}).")
         return
     elif not interactive:
+        if first:
+            print(f"\nSteps {first + 1}-{len(GUIDE)} have no gcloud command; do them in your web browser:")
+            for i in range(first, len(GUIDE)):
+                show(i, False, args.project or "")
         raise Stop("No key file yet. Do the Google Cloud steps (`gchat-mcp setup --guide`), then run again with "
                    "--client-secret <path to the downloaded client_secret_....json>.")
     else:
-        print(f"\nThis tool needs a Google Workspace account (work or school, not @gmail.com) and about 10 minutes."
-              f"\nFirst, {len(GUIDE)} steps in Google Cloud, in your web browser:")
-        for i in range(len(GUIDE)):
-            show(i, interactive)
+        if not first:
+            print("\nThis tool needs a Google Workspace account (work or school, not @gmail.com) and about 10 "
+                  "minutes.")
+        print(f"\n{len(GUIDE) - first} step(s) in Google Cloud, in your web browser:")
+        for i in range(first, len(GUIDE)):
+            show(i, interactive, args.project or "")
         found = newest_download(Path.home() / "Downloads")
         if found and ask(f"\nUse the key file {found}?", True):
             src = found
@@ -347,8 +379,9 @@ def main(argv: list[str]) -> int:
         print(SUBQ)
         return 0
     if args.guide:
+        project = args.project or gcloud.remembered()
         for i in range(len(GUIDE)):
-            show(i, False)
+            show(i, False, project)
         print(named("\nThen run: `gchat-mcp setup --client-secret <path to the downloaded file>`"))
         return 0
     if args.print_config:
@@ -357,7 +390,8 @@ def main(argv: list[str]) -> int:
     try:
         if not args.check:
             interactive = not args.non_interactive and sys.stdin.isatty()
-            get_client(args, interactive)
+            first = cloud(args, interactive) if not args.client_secret and not auth.CLIENT.exists() else 0
+            get_client(args, interactive, first)
             sign_in(args, interactive)
             if args.skip_login and args.relogin and args.footer is not None:
                 raise Stop("The new key file needs a new sign-in before the footer can be saved. Run "

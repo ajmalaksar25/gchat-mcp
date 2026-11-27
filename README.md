@@ -17,7 +17,9 @@ There are two ways to set it up. Both end in the same place.
 
 Copy the prompt below and paste it into your AI assistant (Claude Code, Claude Desktop, Cursor, Codex...). It
 installs everything, runs the setup, connects the server to itself and checks it works. It asks you only for what
-a person must do: the 5 Google Cloud pages, downloading one file, and signing in.
+a person must do: the Google Cloud pages (3 of them when the
+[gcloud CLI](https://cloud.google.com/sdk/docs/install) is installed, 5 without it), downloading one file, and
+signing in.
 
 [![Copy the setup prompt](https://img.shields.io/badge/Copy-setup_prompt-137333)](src/gchat_mcp/agent_prompt.md?plain=1)
 (or click the copy icon on the box below, or run `uvx --python 3.13 google-chat-mcp setup --agent-prompt`, which copies it for you)
@@ -36,7 +38,9 @@ Rules for you:
 Steps:
 1. Check that `uvx` works (`uvx --version`). If it does not, install uv with `curl -LsSf https://astral.sh/uv/install.sh | sh` (macOS or Linux; on macOS `brew install uv` also works) and use the full path it prints if `uvx` is still not found. Windows is not supported: tell me and stop.
 2. Run `uvx --python 3.13 google-chat-mcp setup --check`. If it says "Ready", go to step 6.
-3. Run `uvx --python 3.13 google-chat-mcp setup --guide`. It prints 5 short steps that I do in my web browser in Google Cloud (each has a link, what to click, and what I should see when it worked). Give them to me one at a time, each with its one-line "What", the link, what to click and what I should see.
+3. Ask me one question: "Did your company or a teammate give you a gchat-mcp key file (client_secret_....json)?" If yes, find it (usually in `~/Downloads`) and go to step 4 with it: the Google Cloud steps are already done for me.
+   Otherwise, if `gcloud --version` works, run `uvx --python 3.13 google-chat-mcp setup --gcloud --non-interactive`. It creates a Google Cloud project, turns on the two APIs, and prints the 3 steps left for me, with links that already select that project. If it says gcloud is not signed in or uses a personal Gmail account, tell me: "A Google page will open: choose your work account." Then run `gcloud auth login` and run the setup command again. If it says my organisation does not allow new projects, ask me for a project id I may use and add `--project <id>`. If you do not have gcloud, do not install it for this: run `uvx --python 3.13 google-chat-mcp setup --guide` instead, which prints all 5 steps.
+   Give me the printed steps one at a time, each with its one-line "What", the link, what to click and what I should see.
 4. When I say I downloaded the key file, find it yourself: it is usually the newest `~/Downloads/client_secret_*.json`. Tell me: "A Google sign-in page will open. Choose your work account and click Allow. If Google says the app is not verified, click Continue: it is your own app." Then run, with a command timeout of at least 10 minutes:
    `uvx --python 3.13 google-chat-mcp setup --non-interactive --client-secret <that path>`
    It copies the key file into `~/.config/gchat-mcp/` and waits for my sign-in. If the sign-in fails, tell me what the output says and wait for me before you run `uvx --python 3.13 google-chat-mcp login` again (it opens a new sign-in page).
@@ -69,6 +73,20 @@ turning on anything that sends data to another company.
 
 ![Setup in two parts: 5 steps in the Google Cloud console in your browser, then the setup command saves the key file, signs you in, checks the connection and prints the config for your assistant](docs/setup-flow.svg)
 
+**With the gcloud CLI** (`gcloud auth login` with your work account first), steps 1 and 2 run for you:
+```sh
+uvx --python 3.13 google-chat-mcp setup --gcloud
+```
+It creates a project named `gchat-mcp` (or uses `--project ID`), turns on the Chat and People APIs, and opens
+steps 3-5 with that project already selected. Those three have no gcloud command. The project id is remembered, so
+running setup again reuses it.
+
+**Setting it up for a team.** One person does the 5 steps once in a company project, with the sign-in screen set to
+**Internal**, and shares the downloaded key file privately (a password manager or a direct message, never a public
+place). Everyone else skips Google Cloud entirely and runs
+`uvx --python 3.13 google-chat-mcp setup --client-secret <the shared file>`, then signs in with their own work
+account. Each person's messages stay under their own sign-in; the key file only names the app.
+
 The 5 Google Cloud steps, if you want to read them first (`uvx --python 3.13 google-chat-mcp setup --guide` prints them too):
 
 | Step | What it is | Open | Do | It worked when |
@@ -87,7 +105,8 @@ With an **External** sign-in screen in testing mode, Google ends the sign-in aft
 `uvx --python 3.13 google-chat-mcp login` again when the assistant says so. **Internal** has no such limit.
 
 Every step also runs without questions, for scripts and assistants:
-`setup --non-interactive --client-secret PATH [--footer TEXT] [--subq-key-file PATH] [--skip-login] [--relogin]`,
+`setup --non-interactive [--gcloud [--project ID]] --client-secret PATH [--footer TEXT] [--subq-key-file PATH]
+[--skip-login] [--relogin]`,
 `setup --check` (one read-only call), `setup --guide`, `setup --print-config`, `setup --explain-subq`.
 
 ### Requirements
