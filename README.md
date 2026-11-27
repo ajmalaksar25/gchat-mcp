@@ -124,6 +124,10 @@ claude mcp add -s user gchat -- uv run --directory "$PWD" gchat-mcp
 | `GCHAT_TRIAGE_SNAP=off` | | Keeps Snap off even when a key is present. |
 | `GCHAT_MCP_FOOTER` | unset | Message footer for this server process; wins over the stored footer. Empty or `off` disables it. |
 
+| `GCHAT_MCP_POSTHOG_KEY` | unset | Turns on PostHog usage analytics with this project key (needs the `analytics` extra). `off` disables. |
+| `GCHAT_MCP_POSTHOG_HOST` | `https://us.i.posthog.com` | PostHog ingestion host (`https://eu.i.posthog.com` for EU projects). |
+| `GCHAT_MCP_POSTHOG_DEBUG` | unset | Any value: log each analytics event to stderr. |
+
 Files the server reads or writes (all under your home directory):
 | Path | What |
 |---|---|
@@ -146,7 +150,11 @@ the `inbox_settings` tool and stored in the state file.
   candidate's trigger message, up to 3 earlier messages, sender names, conversation titles and your display name
   to SubQ. SubQ keeps Decisions inputs for up to 60 days unless your SubQ org has zero data retention. Without a
   key, nothing is sent to SubQ; `GCHAT_TRIAGE_SNAP=off` also forces it off.
-- Nothing else: no telemetry, no update checks.
+- **PostHog, only if you opt in.** Usage analytics are off unless you set `GCHAT_MCP_POSTHOG_KEY` (see Usage
+  analytics below). When on, each tool call sends its name, duration, success or error type, the client and model
+  names, and your Google account email, to the PostHog project of that key. Tool arguments, results and error
+  messages (message text, names, conversation ids) are removed before sending.
+- Nothing else: no telemetry by default, no update checks.
 
 ## Approval (optional client hook)
 The server itself never asks for approval; the MCP client decides. The server can add a footer on its own (see
@@ -167,6 +175,23 @@ to `~/.claude/hooks/` and add to `~/.claude/settings.json`:
 }
 ```
 Other clients: use their own approval setting for MCP tool calls.
+
+## Usage analytics (opt-in)
+For the person who runs the server and wants to see how their assistants use it: which tools are called, how
+often, how long they take and which fail, in [PostHog MCP Analytics](https://posthog.com/docs/mcp-analytics).
+Off by default; nothing is sent without a key.
+
+```sh
+claude mcp add -s user -e GCHAT_MCP_POSTHOG_KEY=phc_... gchat -- uvx --python 3.13 --from 'google-chat-mcp[analytics]' gchat-mcp
+# from a checkout: uv sync --extra analytics, then run as usual with the variable set
+```
+- Sent per tool call: `$mcp_tool_call` with the tool name, duration, `$mcp_is_error` and the error type, and the
+  client and model names. Events are tied to the signed-in Google account's email. Also `$mcp_initialize` and
+  `$mcp_tools_list`. Tools keep their schemas (no `context` argument is added, so there is no `$mcp_intent`).
+- Never sent: tool arguments (`$mcp_parameters`), results (`$mcp_response`) and error messages
+  (`$mcp_error_message`), so no message text, names or conversation ids. Exception autocapture is off.
+- The project key is PostHog's public ingestion key (`phc_...`), not a secret, but it lets anyone send events to
+  that project.
 
 ## Tools
 Read: `find_conversations`, `read_conversation`, `search_messages`, `unread` (top-level messages by the space marker, thread replies by each thread's own marker), `needs_reply`, `inbox_triage` / `inbox_wait` (below), `get_attachment` (images inline, text files as text, all saved to `~/.cache/gchat-mcp/attachments`; Drive files go to the Google Drive connector), `list_reactions`. Every message line shows its short message id after the time; the full id is `{conversation}/messages/{short id}`.

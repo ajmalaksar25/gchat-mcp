@@ -10,6 +10,9 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - Followed conversations keep a cursor in the watch state: a re-armed watcher resumes with no gap and no repeats.
 - `degraded` / `recovered` / `stopped` lines on stdout, so a monitor is not silent through an outage.
 - Every watch line has an `event` field (`inbox`, `message`, `note`, `degraded`, `recovered`, `stopped`).
+- Opt-in PostHog MCP Analytics (`GCHAT_MCP_POSTHOG_KEY`, `analytics` extra): tool name, duration, error type, client
+  and model per call, tied to the signed-in account's email. Arguments, results and error messages are never sent.
+  Off by default.
 
 ### Fixed
 - A conversation read that hangs past 2 minutes is abandoned and retried instead of stalling the watcher.
