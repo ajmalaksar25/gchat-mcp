@@ -11,6 +11,8 @@ TOKEN_RE = re.compile(r"@\[([^\[\]\n]{1,100})\]")
 # `@all` (bare, not inside an email or word) and `@[all]`/`@[everyone]` mention everyone: Chat's `<users/all>`.
 BARE_ALL_RE = re.compile(r"(?<![\w.@])@all\b(?![@.]\w)")
 ALL = "users/all"
+# A bare `@Name` (not `@[`, not inside an email or word, not escaped as `\@`) followed by a letter.
+BARE_RE = re.compile(r"(?<![\w.@\\<])@(?=[^\W\d_])")
 ALL_WORDS = {"all", "everyone"}
 
 
@@ -37,6 +39,35 @@ class Ambiguous(MentionError):
 def normalize(text: str) -> str:
     """Turn a bare `@all` into the `@[all]` token form, so it is resolved and verified like any mention."""
     return BARE_ALL_RE.sub("@[all]", text)
+
+
+def has_bare(text: str) -> bool:
+    return bool(BARE_RE.search(text))
+
+
+def convert_bare(text: str, names: list[str]) -> str:
+    """Rewrite each bare `@Full Name` that is exactly a member's full name (longest match, whole words, any case)
+    into the `@[Full Name]` token, so it becomes a real mention; NoMatch (nothing is sent) for a bare `@Word` that
+    is no member's full name, since posting it would look like a mention and notify nobody. `\\@` is a literal @."""
+    out, i = [], 0
+    for m in BARE_RE.finditer(text):
+        p, rest = m.start(), text[m.start() + 1:]
+        fits = [n for n in names if n and rest.casefold().startswith(n.casefold())
+                and not (len(rest) > len(n) and (rest[len(n)].isalnum() or rest[len(n)] == "_"))]
+        if not fits:
+            word = re.match(r"[^\W\d_][\w'’-]*", rest).group(0)
+            close = sorted({n for n in names if n.split() and n.split()[0].casefold() == word.casefold()})
+            hint = f" Did you mean {' or '.join(f'@[{n}]' for n in close)}?" if close else ""
+            raise NoMatch(f"'@{word}' is not a mention: no member of this space is called that. Write "
+                          f"@[Full Name] or @[email] to mention someone, or \\@ for a plain @.{hint} Nothing was sent.")
+        n = max(fits, key=len)
+        out += [text[i:p], f"@[{rest[:len(n)]}]"]
+        i = p + 1 + len(n)
+    return "".join(out) + text[i:]
+
+
+def unescape(text: str) -> str:
+    return text.replace("\\@", "@")
 
 
 def extract(text: str) -> list[str]:

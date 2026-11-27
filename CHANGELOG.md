@@ -5,6 +5,11 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 ### Added
+- Analytics events carry `deployment` (`local` for stdio, `hosted` for remote mode).
+- `send_message(quote_message_id=...)`: reply to one specific message by quoting it; a quoted thread reply goes
+  into the same thread. The read-back confirms the quote.
+- A bare `@Full Name` that is exactly a member's name becomes a real mention; any other bare `@Word` is refused
+  with the `@[Full Name]` form (and a "did you mean"), never posted as a fake mention. `\@` is a plain @.
 - `gchat-mcp watch --chat X --chat Y`: follow several conversations in one watcher and print every new message
   from others; `--inbox` watches the inbox in the same process, `--include-mine` adds my own messages.
 - Followed conversations keep a cursor in the watch state: a re-armed watcher resumes with no gap and no repeats.
@@ -43,6 +48,9 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - Needs `mcp>=1.30`.
 
 ### Fixed
+- "footer added" now says yes when the approval hook added the footer (the hook marks it with `client_footer`),
+  and every send and edit reports what Chat holds: whether the posted message, read back, ends with a footer,
+  else its last line.
 - A conversation read that hangs past 2 minutes is abandoned and retried instead of stalling the watcher.
 - A test that depended on today's date (the 3-day default window) now pins the window.
 
