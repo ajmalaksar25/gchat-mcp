@@ -109,6 +109,13 @@ class ChatServer:
                                    "thread": {"name": thread or f"{m[1]}/threads/new"},
                                    "attachment": [{"contentName": "f.bin", "contentType": "application/octet-stream"}]
                                    if js.get("attachment") else []}
+            if js.get("quotedMessageMetadata"):
+                q = js["quotedMessageMetadata"]
+                src = self.messages.get(q["name"])
+                if src is None or q.get("lastUpdateTime") != (src.get("lastUpdateTime") or src.get("createTime")):
+                    del self.messages[name]
+                    return reply(400, {"error": {"code": 400, "message": "quoted message out of date"}})
+                self.messages[name]["quotedMessageMetadata"] = {"name": q["name"], "quoteType": q.get("quoteType")}
             return reply(200, {"name": name})
         if m and method == "GET":
             flt = params.get("filter") or ""

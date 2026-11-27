@@ -176,6 +176,7 @@ if arg and tool_input.get("footer") is not False:
         text = ""  # when footers are on, a file without a caption still carries one
     if isinstance(text, str) and FOOTER_ON and not text.rstrip().endswith(FOOTER):
         tool_input[arg] = (f"{text.rstrip()}\n\n" if text.strip() else "") + FOOTER
+        tool_input["client_footer"] = FOOTER  # so the server's read-back reports the footer this hook added
         changed = True
 if changed:
     out["updatedInput"] = tool_input
