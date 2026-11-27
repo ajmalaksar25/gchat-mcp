@@ -20,6 +20,9 @@ classifiers = [
 requires-python = ">=3.13"
 dependencies = ["mcp>=1.12,<2", "google-auth>=2.30", "google-auth-oauthlib>=1.2", "requests>=2.32"]
 
+[project.optional-dependencies]
+analytics = ["posthog>=8.2,<9"]  # opt-in PostHog MCP analytics; see README "Usage analytics (opt-in)"
+
 [project.urls]
 Homepage = "https://github.com/ajmalaksar25/gchat-mcp"
 Issues = "https://github.com/ajmalaksar25/gchat-mcp/issues"
@@ -33,6 +36,7 @@ google-chat-mcp = "gchat_mcp.server:main"  # so `uvx google-chat-mcp` works
 dev = [
     "pytest>=8",
     "ruff>=0.15",
+    "posthog>=8.2,<9",  # so CI runs the analytics tests (the extra is opt-in for users)
 ]
 
 [build-system]
