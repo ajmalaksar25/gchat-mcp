@@ -1,4 +1,5 @@
-"""Per-user watch state: which trigger messages were already reported, quiet hours, per-space mute/importance.
+"""Per-user watch state: which trigger messages were already reported, the cursor of each followed conversation
+(`gchat-mcp watch --chat`), quiet hours, per-space mute/importance.
 
 The state holds message ids, timestamps and settings only: never message text, tokens or credentials.
 Every record is keyed by the user's Google account id (from the OAuth grant), so one server process can serve
@@ -36,7 +37,7 @@ SPACE_PREFS = ("mute", "important")
 
 
 def empty() -> dict:
-    return {"version": VERSION, "reported": {},
+    return {"version": VERSION, "reported": {}, "follow": {}, "follow_checked": {},
             "settings": {"quiet_hours": "", "tz": DEFAULT_TZ, "spaces": {}, "footer": ""}}
 
 
@@ -126,6 +127,12 @@ def _normalise(d) -> dict:
     rep = d.get("reported")
     if isinstance(rep, dict):
         out["reported"] = {str(k): v for k, v in rep.items() if _stamp_ok(v)}
+    fol = d.get("follow")  # followed conversation -> create time of the last message reported
+    if isinstance(fol, dict):
+        out["follow"] = {str(k): v for k, v in fol.items() if _stamp_ok(v)}
+    chk = d.get("follow_checked")  # followed conversation -> when it was last read successfully
+    if isinstance(chk, dict):
+        out["follow_checked"] = {str(k): v for k, v in chk.items() if _stamp_ok(v)}
     st = d.get("settings")
     if isinstance(st, dict):
         if isinstance(st.get("tz"), str):
