@@ -56,3 +56,13 @@ def test_tool_call_event_has_no_arguments_or_results(monkeypatch):
     blob = repr(sent)
     assert "SECRET" not in blob and "$mcp_parameters" not in props and "$mcp_response" not in props
     assert all("context" not in t.inputSchema.get("required", []) for t in tools)  # schemas stay as they were
+    assert {kw["properties"].get("deployment") for e, kw in sent} == {"local"}  # on every event, not only calls
+
+
+def test_deployment_is_validated_and_set(monkeypatch):
+    monkeypatch.setenv(analytics.KEY_ENV, "phc_test")
+    with pytest.raises(ValueError):
+        analytics.enable(FastMCP("t"), deployment="cloud")
+    analytics.enable(FastMCP("t"), deployment="hosted")
+    assert analytics.before_send({"event": "x", "properties": {}})["properties"]["deployment"] == "hosted"
+    analytics.enable(FastMCP("t"), deployment="local")

@@ -5,6 +5,7 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 ### Added
+- Analytics events carry `deployment` (`local` for stdio, `hosted` for remote mode).
 - `send_message(quote_message_id=...)`: reply to one specific message by quoting it; a quoted thread reply goes
   into the same thread. The read-back confirms the quote.
 - A bare `@Full Name` that is exactly a member's name becomes a real mention; any other bare `@Word` is refused
@@ -33,11 +34,18 @@ and versions follow [Semantic Versioning](https://semver.org/).
   command and JSON. The assistant prompt asks where you will use it, with these presets.
 - README: team setup (one shared key file from an Internal project, each person signs in as themselves), and the
   assistant prompt asks about a shared key file first and uses gcloud when it is there.
+- Remote mode: `gchat-mcp serve` (extra `remote`) serves the tools over Streamable HTTP with OAuth 2.1 (dynamic
+  client registration, PKCE, refresh, revocation) and Google sign-in per user, so the server can be added to
+  Claude as a custom connector. Stateless: every token is an encrypted blob, no database. Allowlist of users or
+  domains, limited redirect URIs, `/healthz`, a `Dockerfile` and Cloud Run steps in `docs/remote.md`.
 
 ### Changed
 - The Claude Code hook asks once per session per write tool instead of before every write, so "don't ask again
   for this session" works. In bypassPermissions mode it asks the first time and remembers once the call ran
   (needs the hook on PostToolUse too). `GCHAT_MCP_HOOK_ASK=always|off`; `delete_message` always asks.
+- Tools run in a worker thread, so a slow Google call no longer blocks the event loop.
+- DM and group-chat labels are cached per signed-in user.
+- Needs `mcp>=1.30`.
 
 ### Fixed
 - "footer added" now says yes when the approval hook added the footer (the hook marks it with `client_footer`),

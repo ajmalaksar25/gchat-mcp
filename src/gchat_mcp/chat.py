@@ -262,15 +262,16 @@ def label(space: dict) -> str:
     if space.get("displayName"):
         return space["displayName"]
     n = space["name"]
-    if n not in _labels:
+    key = f"{me_id()}\0{n}"  # the label leaves out "me", so it differs per signed-in user (remote mode)
+    if key not in _labels:
         try:
             ms, _ = paginate(f"{n}/members", "memberships", "spaces.members.list", {"pageSize": 20}, 20)
             names = [who(m["member"]) for m in ms
                      if m.get("member", {}).get("type") != "BOT" and fmt.uid(m.get("member")) != me_id()]
-            _labels[n] = ", ".join(names) or "(no other members)"
+            _labels[key] = ", ".join(names) or "(no other members)"
         except ApiError as e:
             return f"{n} (members unreadable: HTTP {e.status})"
-    return _labels[n]
+    return _labels[key]
 
 
 def messages(space: str, since: str = "", thread: str = "", cap: int = 500) -> tuple[list[dict], bool]:

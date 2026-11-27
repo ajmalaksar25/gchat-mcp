@@ -109,10 +109,18 @@ Every step also runs without questions, for scripts and assistants:
 [--skip-login] [--relogin]`,
 `setup --check` (one read-only call), `setup --guide`, `setup --print-config [--for claude-code,claude-desktop,claude-web,codex,cursor,other]`, `setup --explain-subq`.
 
+### Option 3: host it and connect by URL (Claude on the web, desktop and mobile)
+`gchat-mcp serve` runs the same tools as a remote MCP server (Streamable HTTP at `/mcp`, OAuth with dynamic client
+registration), so you add it in Claude under *Settings > Connectors > Add custom connector* and every person signs
+in with their own Google account. It keeps no database: all tokens are encrypted blobs. A `Dockerfile` is included;
+[docs/remote.md](docs/remote.md) has the Cloud Run steps, the variables, and what differs from stdio
+(`send_file` is not offered there).
+
 ### Requirements
 - Python 3.13+ (uv installs it for you), macOS or Linux (file locking and `send_file` path checks use `fcntl`
   and `/proc`; Windows is not supported).
-- An MCP client: Claude Code, Claude Desktop, Codex CLI, Cursor, or any client that runs stdio servers.
+- An MCP client: Claude Code, Claude Desktop, Codex CLI, Cursor, or any client that runs stdio servers; or, in
+  remote mode, any client that connects to a URL.
 
 ### From source
 ```sh
@@ -225,7 +233,8 @@ claude mcp add -s user -e GCHAT_MCP_POSTHOG_KEY=phc_... gchat -- uvx --python 3.
 # from a checkout: uv sync --extra analytics, then run as usual with the variable set
 ```
 - Sent per tool call: `$mcp_tool_call` with the tool name, duration, `$mcp_is_error` and the error type, and the
-  client and model names. Events are tied to the signed-in Google account's email. Also `$mcp_initialize` and
+  client and model names, and `deployment` (`local` for stdio, `hosted` for remote mode). Events are tied to the
+  signed-in Google account's email. Also `$mcp_initialize` and
   `$mcp_tools_list`. Tools keep their schemas (no `context` argument is added, so there is no `$mcp_intent`).
 - Never sent: tool arguments (`$mcp_parameters`), results (`$mcp_response`) and error messages
   (`$mcp_error_message`), so no message text, names or conversation ids. Exception autocapture is off.
@@ -381,9 +390,10 @@ A scheduled task whose prompt is one line, e.g. every 30 minutes on weekdays:
 The same prompt works in any scheduler that runs an agent with this MCP server (cron + `claude -p`, `codex exec`).
 The cursor lives in the server, so a manual `inbox_triage` and the schedule never report the same trigger twice.
 
-### Hosted design (Cloud Run, per-user OAuth; not built)
+### Hosted design (Cloud Run, per-user OAuth; steps 1 and 5 built, see docs/remote.md)
 1. Transport: Streamable HTTP; each request carries the user's Google OAuth grant. `chat` already keys sessions
-   and identity per grant, and state is keyed by the account id, so one instance serves many users.
+   and identity per grant, and state is keyed by the account id, so one instance serves many users. **Built:**
+   `gchat-mcp serve`.
 2. State: a `Store` over Firestore (one document per user key, updated in a transaction), replacing `FileStore`.
 3. Push instead of polling: one Workspace Events API subscription per user on `//chat.googleapis.com/spaces/-`
    (all spaces the user is a member of; user auth), event `google.workspace.chat.message.v1.created`, scope
@@ -393,12 +403,12 @@ The cursor lives in the server, so a manual `inbox_triage` and the schedule neve
 4. Delivery: an event wakes that user's pending `inbox_wait` (no polling) and sends
    `notifications/resources/updated` for `gchat://inbox/needs-reply` to sessions that subscribed. Clients without
    either keep using the `only_new` cursor on a schedule.
-5. Per-user caches: `chat._labels` (DM / group-chat names, which leave out "me") is process-wide today and must
-   be keyed per user before one instance serves many; `_people` (names) is viewer-independent.
+5. Per-user caches: `chat._labels` (DM / group-chat names, which leave out "me") is keyed per user; `_people`
+   (names) is viewer-independent.
 6. Classification: sampling where the client offers it, the client fallback otherwise; an optional server-side
    model (per-tenant key) for push-only alerts, behind the same `parse_answer` validation.
 Sources: developers.google.com/workspace/events/guides (endpoints, lifetimes), .../guides/events-chat (targets,
 event types), .../guides/auth (scopes).
 
 ## Development
-`uv sync`, then `uv run ruff check .` and `uv run python -m pytest -q`. Tests never call Google or SubQ.
+`uv sync --extra remote`, then `uv run ruff check .` and `uv run python -m pytest -q`. Tests never call Google or SubQ.

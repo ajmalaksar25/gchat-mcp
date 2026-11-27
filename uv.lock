@@ -365,6 +365,10 @@ dependencies = [
 analytics = [
     { name = "posthog" },
 ]
+remote = [
+    { name = "cryptography" },
+    { name = "uvicorn" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -375,13 +379,15 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", marker = "extra == 'remote'", specifier = ">=43" },
     { name = "google-auth", specifier = ">=2.30" },
     { name = "google-auth-oauthlib", specifier = ">=1.2" },
-    { name = "mcp", specifier = ">=1.12,<2" },
+    { name = "mcp", specifier = ">=1.30,<2" },
     { name = "posthog", marker = "extra == 'analytics'", specifier = ">=8.2,<9" },
     { name = "requests", specifier = ">=2.32" },
+    { name = "uvicorn", marker = "extra == 'remote'", specifier = ">=0.30" },
 ]
-provides-extras = ["analytics"]
+provides-extras = ["remote", "analytics"]
 
 [package.metadata.requires-dev]
 dev = [

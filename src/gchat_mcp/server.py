@@ -1,4 +1,5 @@
-"""FastMCP server: Google Chat read tools plus write tools (send, file, react, read state, edit) over stdio.
+"""FastMCP server: Google Chat read tools plus write tools (send, file, react, read state, edit) over stdio,
+or over Streamable HTTP with OAuth (`gchat-mcp serve`, see remote.py).
 
 `gchat-mcp login` authorises. All Google calls go through `chat`; credentials come from `auth.credentials()` only.
 """
@@ -37,13 +38,25 @@ mcp = FastMCP("gchat", instructions=(
 
 
 def tool(fn):
-    """Register an MCP tool whose whole run is one `chat.call()`: credentials load once, same grant throughout."""
+    """Register an MCP tool whose whole run is one `chat.call()`: credentials load once, same grant throughout.
+
+    The registered handler runs the tool in a worker thread (context variables, such as the HTTP request's
+    signed-in user, go with it), so over HTTP one slow Google call never stalls another user's request.
+    Returns the plain synchronous function for direct calls.
+    """
     @functools.wraps(fn)
     def run(*a, **k):
         with chat.call():
             return fn(*a, **k)
-    mcp.tool()(run)
+
+    @functools.wraps(fn)
+    async def threaded(*a, **k):
+        return await anyio.to_thread.run_sync(functools.partial(run, *a, **k))
+    mcp.tool()(threaded)
     return run
+
+
+REMOTE = False  # set by http_app(): tools then never read or write this server's own disk for the user
 
 
 MAX_SPACES, MAX_PER_SPACE, OUT_CAP = 60, 500, 40000
@@ -379,15 +392,20 @@ def get_attachment(message_id: str, index: int = 0, quoted: bool = False) -> Cal
     if not resource:
         raise ValueError(f"{name} has no downloadable data reference (source: {a.get('source', 'unknown')}).")
     data = chat.download(resource, ATTACH_CAP)
-    ATTACH_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path = ATTACH_DIR / f"{message_id.split('/')[-1]}_{int(quoted)}_{index}_{re.sub(r'[^\w.-]', '_', name)}"
-    path.write_bytes(data)
-    content = [TextContent(type="text", text=f"{name} ({ctype}, {len(data) / 1024:.0f} KB) saved to {path}")]
+    if REMOTE:  # a hosted server's disk is not the user's: return the content only
+        content = [TextContent(type="text", text=f"{name} ({ctype}, {len(data) / 1024:.0f} KB)")]
+    else:
+        ATTACH_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = ATTACH_DIR / f"{message_id.split('/')[-1]}_{int(quoted)}_{index}_{re.sub(r'[^\w.-]', '_', name)}"
+        path.write_bytes(data)
+        content = [TextContent(type="text", text=f"{name} ({ctype}, {len(data) / 1024:.0f} KB) saved to {path}")]
     if ctype in IMAGE_TYPES and len(data) <= INLINE_IMAGE_CAP:
         content.append(ImageContent(type="image", data=base64.b64encode(data).decode(), mimeType=ctype))
     elif ctype.startswith(TEXT_TYPES):
         text = data.decode("utf-8", errors="replace")
         content.append(TextContent(type="text", text=text[:OUT_CAP] + ("\n…(truncated)" if len(text) > OUT_CAP else "")))
+    elif REMOTE:
+        content.append(TextContent(type="text", text="Not shown inline: this file type can only be opened in Google Chat."))
     else:
         content.append(TextContent(type="text", text="Not shown inline: read the saved file (images and PDFs are readable)."))
     return CallToolResult(content=content)
@@ -411,7 +429,7 @@ def needs(scope: str):
         yield
     except chat.ApiError as e:
         if e.scope_missing:
-            raise auth.AuthError(f"The saved sign-in lacks the {SCOPE_NAMES[scope]} grant: run `gchat-mcp login` "
+            raise auth.AuthError(f"The saved sign-in lacks the {SCOPE_NAMES[scope]} grant: {auth.relogin_hint()} "
                                  "once to grant it, then retry.") from e
         raise
 
@@ -1417,8 +1435,50 @@ def inbox_settings(quiet_hours: str = "", timezone_name: str = "", mute: list[st
             + f"\nSpaces: {prefs}\n{footer_line}\nReported triggers remembered: {out['reported_triggers']}")
 
 
+REMOTE_ONLY_LOCAL = ("send_file",)  # reads a path on the server's own disk: meaningless and unsafe when hosted
+
+
+def http_app():
+    """The ASGI app for remote mode (Streamable HTTP at /mcp, OAuth endpoints, /healthz); config from env.
+
+    Use it from any ASGI host, e.g. a Vercel `api/index.py` with `app = http_app()`, or run `gchat-mcp serve`.
+    """
+    global REMOTE
+    from starlette.applications import Starlette
+    from . import remote
+    remote.configure(mcp, remote.Config.from_env())
+    REMOTE = True
+    for name in REMOTE_ONLY_LOCAL:
+        mcp.remove_tool(name)
+    from . import analytics
+    analytics.enable(mcp, deployment="hosted")  # opt-in (GCHAT_MCP_POSTHOG_KEY); before the app is built
+    app = mcp.streamable_http_app
+    return app if isinstance(app, Starlette) else app()
+
+
+def serve(argv: list[str]) -> int:
+    import argparse
+    import uvicorn
+    from . import remote
+    p = argparse.ArgumentParser(prog="gchat-mcp serve", description="Run as a remote MCP server (Streamable "
+                                "HTTP with OAuth) for clients that connect by URL. Configuration: docs/remote.md.")
+    p.add_argument("--host", default=os.environ.get("HOST", "0.0.0.0"))
+    p.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8080")))
+    a = p.parse_args(argv)
+    try:
+        app = http_app()
+    except remote.ConfigError as e:
+        print(e, file=sys.stderr)
+        return 2
+    # Behind Cloud Run / a load balancer; every URL the server prints comes from GCHAT_MCP_BASE_URL anyway.
+    uvicorn.run(app, host=a.host, port=a.port, proxy_headers=True, forwarded_allow_ips="*")
+    return 0
+
+
 def main() -> None:
-    if len(sys.argv) > 1 and sys.argv[1] == "login":
+    if len(sys.argv) > 1 and sys.argv[1] == "serve":
+        sys.exit(serve(sys.argv[2:]))
+    elif len(sys.argv) > 1 and sys.argv[1] == "login":
         auth.login()
     elif len(sys.argv) > 1 and sys.argv[1] == "setup":
         from . import setup
@@ -1428,7 +1488,7 @@ def main() -> None:
         sys.exit(watch.main(sys.argv[2:]))
     else:
         from . import analytics
-        ph = analytics.enable(mcp)
+        ph = analytics.enable(mcp, deployment="local")
         try:
             mcp.run()
         finally:
