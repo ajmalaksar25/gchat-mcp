@@ -4,6 +4,11 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+### Added
+- `list_members`: a conversation's members with email, role (manager or member), human or app, and join time.
+- `notification_settings` / `set_notifications`: read and change my own Chat notification level (`all`, `main`,
+  `for_you`, `off`) and mute for one conversation. New scope `chat.users.spacesettings`: run `gchat-mcp login`
+  once after upgrading.
 
 ## [0.3.0] - 2026-11-26
 ### Added

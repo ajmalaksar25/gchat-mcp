@@ -54,6 +54,7 @@ class ChatServer:
         self.ignore_user_filter = False  # simulate a broken reactions.list filter
         self.break_reads = False  # after the first write, every GET answers 503
         self.wrote = False
+        self.notify = {}  # space -> {"notificationSetting", "muteSetting"} for users/me
 
     def add_reaction(self, msg, emoji, user=f"users/{ME}"):
         self._rid += 1
@@ -120,6 +121,13 @@ class ChatServer:
             start, size = int(params.get("pageToken", 0)), int(params.get("pageSize", 100))
             return reply(200, {"messages": msgs[start:start + size],
                                **({"nextPageToken": str(start + size)} if start + size < len(msgs) else {})})
+        m = re.match(r"v1/users/me/(spaces/[^/]+)/spaceNotificationSetting$", path)
+        if m:
+            cur = self.notify.setdefault(m[1], {"notificationSetting": "ALL", "muteSetting": "UNMUTED"})
+            if method == "PATCH":
+                for f in params["updateMask"].split(","):
+                    cur[f] = js[f]
+            return reply(200, {"name": path[3:], **cur})
         m = re.match(r"v1/(spaces/[^/]+)/members$", path)
         if m:
             start = int(params.get("pageToken", 0))
