@@ -5,10 +5,29 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 ### Added
+- `gchat-mcp watch --chat X --chat Y`: follow several conversations in one watcher and print every new message
+  from others; `--inbox` watches the inbox in the same process, `--include-mine` adds my own messages.
+- Followed conversations keep a cursor in the watch state: a re-armed watcher resumes with no gap and no repeats.
+- `degraded` / `recovered` / `stopped` lines on stdout, so a monitor is not silent through an outage.
+- Every watch line has an `event` field (`inbox`, `message`, `note`, `degraded`, `recovered`, `stopped`).
+- Opt-in PostHog MCP Analytics (`GCHAT_MCP_POSTHOG_KEY`, `analytics` extra): tool name, duration, error type, client
+  and model per call, tied to the signed-in account's email. Arguments, results and error messages are never sent.
+  Off by default.
+- `footer: false` on `send_message`, `send_file` and `edit_message` sends that one message without the footer
+  (server footer and hook footer both skip it).
 - `list_members`: a conversation's members with email, role (manager or member), human or app, and join time.
 - `notification_settings` / `set_notifications`: read and change my own Chat notification level (`all`, `main`,
   `for_you`, `off`) and mute for one conversation. New scope `chat.users.spacesettings`: run `gchat-mcp login`
   once after upgrading.
+
+### Changed
+- The Claude Code hook asks once per session per write tool instead of before every write, so "don't ask again
+  for this session" works. In bypassPermissions mode it asks the first time and remembers once the call ran
+  (needs the hook on PostToolUse too). `GCHAT_MCP_HOOK_ASK=always|off`; `delete_message` always asks.
+
+### Fixed
+- A conversation read that hangs past 2 minutes is abandoned and retried instead of stalling the watcher.
+- A test that depended on today's date (the 3-day default window) now pins the window.
 
 ## [0.3.0] - 2026-11-26
 ### Added
