@@ -415,7 +415,10 @@ def test_bad_stored_values_never_break_a_watch(srv):
     assert "Quiet hours: off" in call("inbox_settings")["result"]
 
 
-def test_resource_lists_candidates_without_recording(srv):
+def test_resource_lists_candidates_without_recording(srv, monkeypatch):
+    real = server._since  # the resource scans the default window (3 days back); pin it to the fixtures' dates
+    monkeypatch.setattr(server, "_since", lambda s, days: real(s or SINCE, days))
+
     async def go():
         async with create_connected_server_and_client_session(server.mcp) as c:
             return await c.read_resource(server.INBOX_URI)
