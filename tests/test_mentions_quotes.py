@@ -59,3 +59,16 @@ def test_footer_added_by_the_hook_is_reported(srv):
     out = server.send_message("AAA", "hello\n\n_Sent by a hook_", client_footer="_Sent by a hook_")
     assert "footer added: yes (by the approval hook)" in out
     assert "footer added: no" in server.send_message("AAA", "hello")
+
+
+def test_report_says_what_chat_holds_at_the_end(srv):
+    out = server.send_message("AAA", "hello\n\n_Sent by a hook_", client_footer="_Sent by a hook_")
+    assert "read back from Chat: the posted message ends with the footer '_Sent by a hook_'" in out
+    out = server.send_message("AAA", "just this")
+    assert "read back from Chat: the posted message does not end with a footer this server knows (last line: 'just this')" in out
+
+
+def test_report_catches_a_footer_nobody_reported(srv, monkeypatch):
+    monkeypatch.setenv("GCHAT_MCP_FOOTER", "_Sent by a bot_")
+    out = server.send_message("AAA", "already labelled\n\n_Sent by a bot_")
+    assert "footer added: no" in out and "ends with the footer '_Sent by a bot_'" in out

@@ -560,13 +560,34 @@ def _outgoing_text(space: str, text: str, use_footer: bool = True, client_footer
     return rewritten, want, added
 
 
+def _known_footers(client_footer: str = "") -> list[str]:
+    """Footers a posted message may end with: the approval hook's and this server's configured one."""
+    try:
+        server_footer = _footer()
+    except Exception:  # the read-back report must never fail because settings could not be read
+        server_footer = ""
+    return [f.strip() for f in (client_footer, server_footer) if f and f.strip()]
+
+
+def _posted_footer(m: dict, footers: list[str]) -> str:
+    """What Chat holds, read back: whether the posted text ends with one of `footers`, else its last line."""
+    text, formatted = (m.get("text") or "").rstrip(), (m.get("formattedText") or "").rstrip()
+    for f in footers:
+        plain = re.sub(r"[*_~`]", "", f).strip()
+        if formatted.endswith(f) or text.endswith(f) or (plain and text.endswith(plain)):
+            return f"read back from Chat: the posted message ends with the footer {f!r}"
+    last = (text.splitlines() or [""])[-1].strip()
+    return f"read back from Chat: the posted message does not end with a footer this server knows (last line: {last[:80]!r})"
+
+
 def _footer_note(added) -> str:
     return "footer added: yes (by the approval hook)" if added == "hook" else f"footer added: {'yes' if added else 'no'}"
 
 
-def _sent_report(name: str, space: str, want: list[str], footer_added, quoted: str | None = None) -> str:
+def _sent_report(name: str, space: str, want: list[str], footer_added, quoted: str | None = None,
+                 footers: list[str] | None = None) -> str:
     m = chat.get(name, "messages.get")
-    out = _render_sent(m, space, want, footer_added)
+    out = _render_sent(m, space, want, footer_added, footers)
     if quoted:
         got = m.get("quotedMessageMetadata", {}).get("name")
         out += (f"\nQuoting `{quoted}`." if got == quoted else
@@ -574,12 +595,12 @@ def _sent_report(name: str, space: str, want: list[str], footer_added, quoted: s
     return out
 
 
-def _render_sent(m: dict, space: str, want: list[str], footer_added) -> str:
+def _render_sent(m: dict, space: str, want: list[str], footer_added, footers: list[str] | None = None) -> str:
     s = m.get("sender", {})
     seen = f"private, only {chat.who(m['privateMessageViewer'])} can see it" if m.get("privateMessageViewer") else "visible to the conversation"
     out = (f"Sent `{m['name']}` in thread `{m.get('thread', {}).get('name', '')}` to {chat.label(chat.get(space, 'spaces.get'))}.\n"
            f"Sender: {chat.who(s)} ({s.get('type', 'unknown type')}, {'me' if fmt.uid(s) == chat.me_id() else 'NOT me'}); {seen}.")
-    out += f"\n{_footer_note(footer_added)}."
+    out += f"\n{_footer_note(footer_added)}; {_posted_footer(m, footers or [])}."
     if want:
         gone = mentions.missing(m, want)
         out += (f"\nMentions confirmed: {', '.join('everyone (@all)' if u == mentions.ALL else chat.who(u) for u in want)}." if not gone else
@@ -629,7 +650,8 @@ def send_message(conversation_id: str, messageText: str, thread_id: str = "", fo
     body["text"], want, footer_added = _outgoing_text(space, messageText, footer, client_footer)
     name = _create(space, body, params)
     return _verified(f"Sent `{name}` ({_footer_note(footer_added)})",
-                     lambda: _sent_report(name, space, want, footer_added, quote and quote["name"]))
+                     lambda: _sent_report(name, space, want, footer_added, quote and quote["name"],
+                                          _known_footers(client_footer)))
 
 
 @tool
@@ -666,7 +688,7 @@ def send_file(conversation_id: str, path: str, text: str = "", thread_id: str = 
     def report() -> str:
         m = chat.get(name, "messages.get")
         atts = [f"{a.get('contentName', '?')} ({a.get('contentType', '?')})" for a in m.get("attachment", [])]
-        return _render_sent(m, space, want, footer_added) + "\n" + (
+        return _render_sent(m, space, want, footer_added, _known_footers(client_footer)) + "\n" + (
             f"Attachment in the read-back: {', '.join(atts)}; uploaded {real.name}, {size:,} bytes." if atts else
             f"WARNING: the read-back shows no attachment (uploaded {real.name}, {size:,} bytes): check the message in Chat.")
     return _verified(f"Sent `{name}` with {real.name} ({_footer_note(footer_added)})", report)
@@ -720,7 +742,7 @@ def edit_message(message_id: str, new_text: str, conversation_id: str = "", foot
     checks = ["text verified"]
     if want:
         checks.append(f"mentions confirmed: {', '.join(chat.who(u) for u in want)}")
-    checks.append(_footer_note(footer_added))
+    checks.append(f"{_footer_note(footer_added)}; {_posted_footer(m, _known_footers(client_footer))}")
     return (f"Edited `{ref}` (last edited {fmt.fmt_time(m['lastUpdateTime']) if m.get('lastUpdateTime') else 'time not shown'}); "
             + ", ".join(checks) + ".")
 

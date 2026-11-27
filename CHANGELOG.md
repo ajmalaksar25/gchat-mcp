@@ -40,7 +40,9 @@ and versions follow [Semantic Versioning](https://semver.org/).
   (needs the hook on PostToolUse too). `GCHAT_MCP_HOOK_ASK=always|off`; `delete_message` always asks.
 
 ### Fixed
-- "footer added" now says yes when the approval hook added the footer (the hook marks it with `client_footer`).
+- "footer added" now says yes when the approval hook added the footer (the hook marks it with `client_footer`),
+  and every send and edit reports what Chat holds: whether the posted message, read back, ends with a footer,
+  else its last line.
 - A conversation read that hangs past 2 minutes is abandoned and retried instead of stalling the watcher.
 - A test that depended on today's date (the 3-day default window) now pins the window.
 
