@@ -173,11 +173,11 @@ a call ran):
 {
   "hooks": {
     "PreToolUse": [{
-      "matcher": "mcp__gchat.*__(send_message|send_file|add_reaction|react|mark_read|mark_unread|start_conversation|edit_message|delete_message)$",
+      "matcher": "mcp__gchat.*__(send_message|send_file|add_reaction|react|mark_read|mark_unread|start_conversation|edit_message|delete_message|set_notifications)$",
       "hooks": [{"type": "command", "command": "python3 ~/.claude/hooks/gchat-footer.py"}]
     }],
     "PostToolUse": [{
-      "matcher": "mcp__gchat.*__(send_message|send_file|add_reaction|react|mark_read|mark_unread|start_conversation|edit_message|delete_message)$",
+      "matcher": "mcp__gchat.*__(send_message|send_file|add_reaction|react|mark_read|mark_unread|start_conversation|edit_message|delete_message|set_notifications)$",
       "hooks": [{"type": "command", "command": "python3 ~/.claude/hooks/gchat-footer.py"}]
     }]
   }

@@ -124,6 +124,8 @@ def reason(tool: str, a: dict) -> str:
         return f'Google Chat edit: {a.get("message_id")}' + (" (footer added)" if FOOTER_ON else "")
     if tool == "delete_message":
         return f'Google Chat DELETE: {a.get("message_id")}'
+    if tool == "set_notifications":
+        return f'Google Chat notifications for {a.get("conversation_id")}: notify={a.get("notify") or "unchanged"}, mute={a.get("mute") or "unchanged"}'
     return "Google Chat send" + (": footer added" if FOOTER_ON else "")
 
 
