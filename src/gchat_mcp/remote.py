@@ -175,6 +175,7 @@ class GoogleProxyProvider:
     def __init__(self, cfg: Config, http=requests):
         self.cfg, self.box, self.http = cfg, Box(cfg.secrets), http
         self._used: dict[str, float] = {}  # code hash -> expiry: single use within this instance
+        self._spent: dict[str, float] = {}  # replaced refresh token hash -> expiry (rotation, per instance)
         self._lock = threading.Lock()
 
     # --- clients (RFC 7591): the client id is the sealed registration
@@ -253,7 +254,7 @@ class GoogleProxyProvider:
             return back(error="server_error", error_description=e.error_description or "Google sign-in failed")
         email = claims.get("email", "")
         if not claims.get("email_verified") or not self.cfg.user_allowed(email):
-            return back(error="access_denied", error_description=f"{email or 'This account'} may not use this server")
+            return back(error="access_denied", error_description="This Google account may not use this server")
         if not tok.get("refresh_token"):
             return back(error="server_error", error_description="Google returned no refresh token; try again")
         granted = set(tok.get("scope", "").split())
@@ -284,7 +285,8 @@ class GoogleProxyProvider:
     def _issue(self, client_id: str, scopes: list[str], resource: str | None, g: dict) -> OAuthToken:
         now = time.time()
         base = {"cid": _cid(client_id), "sc": scopes, "res": resource}
-        access = self.box.seal("access", {**base, "exp": now + ACCESS_TTL, "g": g})
+        # the access token carries the full client id: token revocation (RFC 7009) checks it against the caller
+        access = self.box.seal("access", {**base, "ci": client_id, "exp": now + ACCESS_TTL, "g": g})
         refresh = self.box.seal("refresh", {**base, "exp": now + REFRESH_TTL,
                                             "g": {k: g[k] for k in ("rt", "sub", "email", "scopes")}})
         return OAuthToken(access_token=access, token_type="Bearer", expires_in=ACCESS_TTL, scope=" ".join(scopes),
@@ -296,13 +298,22 @@ class GoogleProxyProvider:
 
     async def load_refresh_token(self, client: OAuthClientInformationFull, refresh_token: str):
         d = self.box.open("refresh", refresh_token)
-        if not d or d["cid"] != _cid(client.client_id):
+        if not d or d["cid"] != _cid(client.client_id) or self._is_spent(refresh_token):
             return None
         return Refresh(token=refresh_token, client_id=client.client_id, scopes=d["sc"], expires_at=int(d["exp"]),
                        resource=d["res"], subject=d["g"]["sub"], google=d["g"])
 
+    def _is_spent(self, token: str) -> bool:
+        with self._lock:
+            now = time.time()
+            for k in [k for k, exp in self._spent.items() if exp < now]:
+                del self._spent[k]
+            return hashlib.sha256(token.encode()).hexdigest() in self._spent
+
     async def exchange_refresh_token(self, client: OAuthClientInformationFull, refresh_token: Refresh,
                                      scopes: list[str]) -> OAuthToken:
+        with self._lock:  # rotation: the refresh token just used is refused from now on (on this instance)
+            self._spent[hashlib.sha256(refresh_token.token.encode()).hexdigest()] = float(refresh_token.expires_at or 0)
         g = dict(refresh_token.google)
         if not self.cfg.user_allowed(g.get("email", "")):
             raise TokenError("invalid_grant", "this account may no longer use this server")
@@ -320,7 +331,7 @@ class GoogleProxyProvider:
             return None
         if d["res"] and d["res"].rstrip("/") not in (self.cfg.base_url, self.cfg.base_url + "/mcp"):
             return None  # issued for another resource
-        return Access(token=token, client_id=d["cid"], scopes=d["sc"], expires_at=int(d["exp"]), resource=d["res"],
+        return Access(token=token, client_id=d.get("ci") or d["cid"], scopes=d["sc"], expires_at=int(d["exp"]), resource=d["res"],
                       subject=d["g"]["sub"], google=d["g"])
 
     async def revoke_token(self, token) -> None:

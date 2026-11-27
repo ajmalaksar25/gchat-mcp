@@ -199,9 +199,36 @@ def test_refresh_rotates_access_and_follows_google_revocation(server):
     assert r.status_code == 200, r.text
     remote._creds.clear()
     assert _whoami(c, r.json()["access_token"])[1].startswith("gat-refreshed-")
+    new_refresh = r.json()["refresh_token"]
     g.refresh_ok = False  # the user removed access in their Google account
-    r = c.post("/token", data={"grant_type": "refresh_token", "refresh_token": t["refresh_token"], "client_id": cid})
+    r = c.post("/token", data={"grant_type": "refresh_token", "refresh_token": new_refresh, "client_id": cid})
     assert r.status_code == 400
+
+
+def test_a_replaced_refresh_token_is_refused(server):
+    c, g = server
+    cid, q, v = _sign_in(c, g)
+    t = _token(c, cid, q["code"][0], v).json()
+    ok = c.post("/token", data={"grant_type": "refresh_token", "refresh_token": t["refresh_token"], "client_id": cid})
+    assert ok.status_code == 200
+    again = c.post("/token", data={"grant_type": "refresh_token", "refresh_token": t["refresh_token"], "client_id": cid})
+    assert again.status_code == 400  # rotation: the old one is spent
+
+
+def test_revoking_an_access_token_revokes_the_google_grant(server):
+    c, g = server
+    cid, q, v = _sign_in(c, g)
+    t = _token(c, cid, q["code"][0], v).json()
+    r = c.post("/revoke", data={"token": t["access_token"], "token_type_hint": "access_token", "client_id": cid,
+                                 "client_secret": ""})  # the SDK form model requires the field
+    assert r.status_code == 200
+    assert any(url == remote.GOOGLE_REVOKE for url, _ in g.calls)
+
+
+def test_a_refused_sign_in_does_not_tell_the_client_the_email(server):
+    c, g = server
+    _, q, _ = _sign_in(c, g, "stranger@gmail.com")
+    assert "stranger" not in q["error_description"][0]
 
 
 def test_config_errors_name_what_is_missing():
