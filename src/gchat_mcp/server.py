@@ -1286,7 +1286,13 @@ def main() -> None:
         from . import watch
         sys.exit(watch.main(sys.argv[2:]))
     else:
-        mcp.run()
+        from . import analytics
+        ph = analytics.enable(mcp)
+        try:
+            mcp.run()
+        finally:
+            if ph:
+                ph.shutdown()  # send what is queued before the process ends
 
 
 if __name__ == "__main__":
