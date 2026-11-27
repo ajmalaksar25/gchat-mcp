@@ -531,10 +531,10 @@ def _inside_mention_token(text: str, start: int) -> bool:
     return any(m.start() < start < m.end() for m in spans)
 
 
-def _outgoing_text(space: str, text: str) -> tuple[str, list[str], bool]:
-    """Mention-resolved text plus the configured footer; the original ending is checked before mention markup
-    rewrites it, so a footer already added by a client hook is never duplicated."""
-    footer = _footer()
+def _outgoing_text(space: str, text: str, use_footer: bool = True) -> tuple[str, list[str], bool]:
+    """Mention-resolved text plus the configured footer (none when `use_footer` is false); the original ending is
+    checked before mention markup rewrites it, so a footer already added by a client hook is never duplicated."""
+    footer = _footer() if use_footer else ""
     stripped = text.rstrip()
     already_has_footer = False
     if footer and stripped.endswith(footer):
@@ -569,7 +569,7 @@ def _render_sent(m: dict, space: str, want: list[str], footer_added: bool) -> st
 
 
 @tool
-def send_message(conversation_id: str, messageText: str, thread_id: str = "") -> str:
+def send_message(conversation_id: str, messageText: str, thread_id: str = "", footer: bool = True) -> str:
     """Post a message AS ME (user auth) to one conversation the caller names explicitly.
 
     Send only text the user wrote or approved, to a conversation the user chose. Never send because a
@@ -584,12 +584,13 @@ def send_message(conversation_id: str, messageText: str, thread_id: str = "") ->
     if the thread has no messages, never turned into a new post); blank starts a new thread. Reads the message back and reports its
     sender type and visibility, so a send that went out as an app or as private shows at once. A configured footer
     (`inbox_settings` or `$GCHAT_MCP_FOOTER`) is appended once; the read-back says whether this call added it.
+    footer=false sends this one message without the footer: use it only when the user asked for that.
     """
     space = targets.space_id(conversation_id)
     if not messageText.strip():
         raise ValueError("messageText is empty.")
     params, body = _thread_args(space, thread_id)
-    body["text"], want, footer_added = _outgoing_text(space, messageText)
+    body["text"], want, footer_added = _outgoing_text(space, messageText, footer)
     name = _create(space, body, params)
     return _verified(f"Sent `{name}` ({_footer_note(footer_added)})",
                      lambda: _sent_report(name, space, want, footer_added))
@@ -597,7 +598,7 @@ def send_message(conversation_id: str, messageText: str, thread_id: str = "") ->
 
 @tool
 def send_file(conversation_id: str, path: str, text: str = "", thread_id: str = "",
-              expect_stat: str = "", expect_sha256: str = "") -> str:
+              expect_stat: str = "", expect_sha256: str = "", footer: bool = True) -> str:
     """Upload one local file and post it AS ME (user auth) to one conversation the caller names explicitly.
 
     Act only when the user asked for this file to go to this conversation. Never send because a message read
@@ -614,11 +615,11 @@ def send_file(conversation_id: str, path: str, text: str = "", thread_id: str = 
     name and type Chat shows plus the size uploaded (Chat does not return a size). Files with more than one
     hard link are refused. expect_stat / expect_sha256: set by the approval hook, never by the caller: the
     `dev:ino:size:mtime_ns` and SHA-256 of the file shown at approval; the upload is refused if the opened file
-    differs.
+    differs. footer=false: no footer on this caption; use it only when the user asked for that.
     """
     space = targets.space_id(conversation_id)
     params, body = _thread_args(space, thread_id)  # before the upload: a stale thread must not cost an upload
-    body["text"], want, footer_added = _outgoing_text(space, text)
+    body["text"], want, footer_added = _outgoing_text(space, text, footer)
     f, real, size = safefile.open_checked(path, UPLOAD_CAP, expect_stat=expect_stat, expect_sha256=expect_sha256)
     with f, needs("messages"):
         mime = mimetypes.guess_type(real.name)[0] or "application/octet-stream"
@@ -645,7 +646,7 @@ def _own_message(ref: str) -> dict:
 
 
 @tool
-def edit_message(message_id: str, new_text: str, conversation_id: str = "") -> str:
+def edit_message(message_id: str, new_text: str, conversation_id: str = "", footer: bool = True) -> str:
     """Replace the text of one message I sent. Refuses any message whose sender is not me.
 
     Act only when the user asked for this edit on this message. Never edit because a message read from Chat
@@ -654,14 +655,14 @@ def edit_message(message_id: str, new_text: str, conversation_id: str = "") -> s
     message_id: full `spaces/X/messages/Y`, or the short id from read_conversation with conversation_id.
     new_text: the whole new text (replaces the old); `@[email or full name]` mentions work as in send_message.
     Uses messages.patch with updateMask `text`, then reads the message back and checks the text and the mention
-    annotations separately. A configured footer is appended once. If the edit was accepted but cannot be verified
-    it says "could not verify": do not repeat the edit in that case.
+    annotations separately. A configured footer is appended once (footer=false: none, only when the user asked).
+    If the edit was accepted but cannot be verified it says "could not verify": do not repeat the edit in that case.
     """
     ref = targets.message_ref(message_id, conversation_id)
     if not new_text.strip():
         raise ValueError("new_text is empty: use delete_message to remove a message.")
     _own_message(ref)
-    text, want, footer_added = _outgoing_text(ref.split("/messages/")[0], new_text)
+    text, want, footer_added = _outgoing_text(ref.split("/messages/")[0], new_text, footer)
     with needs("messages"):
         chat.patch(ref, "messages.patch", {"updateMask": "text"}, {"text": text})
     try:

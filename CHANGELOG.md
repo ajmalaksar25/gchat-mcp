@@ -13,6 +13,13 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - Opt-in PostHog MCP Analytics (`GCHAT_MCP_POSTHOG_KEY`, `analytics` extra): tool name, duration, error type, client
   and model per call, tied to the signed-in account's email. Arguments, results and error messages are never sent.
   Off by default.
+- `footer: false` on `send_message`, `send_file` and `edit_message` sends that one message without the footer
+  (server footer and hook footer both skip it).
+
+### Changed
+- The Claude Code hook asks once per session per write tool instead of before every write, so "don't ask again
+  for this session" works. In bypassPermissions mode it asks the first time and remembers once the call ran
+  (needs the hook on PostToolUse too). `GCHAT_MCP_HOOK_ASK=always|off`; `delete_message` always asks.
 
 ### Fixed
 - A conversation read that hangs past 2 minutes is abandoned and retried instead of stalling the watcher.

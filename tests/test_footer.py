@@ -142,3 +142,10 @@ def test_edit_gets_footer_once(srv, monkeypatch):
     patch = [x for x in srv.log if x[0] == "PATCH" and x[1] == f"v1/{name}"][-1]
     assert patch[3]["text"] == f"changed again\n\n{FOOTER}"
     assert "footer added: no" in out
+
+
+def test_footer_false_skips_the_footer_for_one_message(srv, monkeypatch):
+    monkeypatch.setenv("GCHAT_MCP_FOOTER", "_Sent by a bot_")
+    from gchat_mcp import server
+    assert "footer added: no" in server.send_message("AAA", "just me", footer=False)
+    assert "footer added: yes" in server.send_message("AAA", "with label")
