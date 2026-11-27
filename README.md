@@ -156,7 +156,9 @@ Message footer below). In Claude Code, `hooks/gchat-footer.py` handles approval 
   Claude Code's own prompt, the hook makes no decision, so that prompt and its "don't ask again for this session"
   choice work. In bypassPermissions mode, which shows no prompt, the hook asks the first time a session uses a
   write tool (the reason names the target); once that call has run, the session uses that tool without asking
-  again. The record of that is a small file per session under `~/.cache/gchat-mcp/hook-approvals/`, removed
+  again. Only calls the hook asked about count, and each MCP server's tools are approved separately. In auto
+  mode, a call the hook rewrote (footer, file binding) is shown for approval, because auto mode judged the
+  original form. The record of that is a small file per session under `~/.cache/gchat-mcp/hook-approvals/`, removed
   after 3 days.
 - `GCHAT_MCP_HOOK_ASK=always` asks before every write (a hook's "ask" overrides any session allow, so "don't ask
   again" has no effect then). `off` makes no decision at all.

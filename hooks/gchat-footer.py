@@ -4,8 +4,10 @@
 Register it for PreToolUse and PostToolUse (README, "Approval"). `GCHAT_MCP_HOOK_ASK` sets when it asks:
 - `session` (default): once per session per tool. In modes that show Claude Code's own prompt, the hook makes no
   decision, so that prompt and its "don't ask again for this session" choice work. In bypassPermissions mode,
-  which shows no prompt, the hook asks the first time a session uses a write tool; once that call has run
-  (PostToolUse), the session uses that tool without asking again.
+  which shows no prompt, the hook asks the first time a session uses a write tool; once that asked-for call has
+  run (PostToolUse), the session uses that tool without asking again. Only calls this hook asked about count, and
+  each MCP server's tools are approved separately. In auto mode a call the hook rewrote (footer, file binding)
+  is shown for approval, since auto mode judged the original form.
 - `always`: ask before every write (a hook "ask" overrides any session allow).
 - `off`: no decision; Claude Code's permission settings alone decide.
 `delete_message` asks every time in every setting. A "reason" names the target of each ask.
@@ -35,41 +37,64 @@ def _approval_file(session: str) -> Path:
     return APPROVALS / (hashlib.sha256(session.encode()).hexdigest()[:24] + ".json")
 
 
-def approved(session: str, tool: str) -> bool:
+def _load(session: str) -> dict:
     try:
-        return tool in json.loads(_approval_file(session).read_text())
-    except (OSError, ValueError, TypeError):
-        return False
+        d = json.loads(_approval_file(session).read_text())
+        return {"approved": set(d.get("approved", [])), "pending": set(d.get("pending", []))}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {"approved": set(), "pending": set()}
 
 
-def remember(session: str, tool: str) -> None:
-    """Record that this session ran `tool` after an approval; old sessions' files are removed."""
+def _save(session: str, d: dict) -> None:
     APPROVALS.mkdir(parents=True, exist_ok=True)
     now = time.time()
-    for f in APPROVALS.glob("*.json"):
+    for f in APPROVALS.glob("*.json"):  # old sessions' files
         try:
             if now - f.stat().st_mtime > KEEP_SECONDS:
                 f.unlink()
         except OSError:
             pass
     path = _approval_file(session)
-    try:
-        tools = set(json.loads(path.read_text()))
-    except (OSError, ValueError, TypeError):
-        tools = set()
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(sorted(tools | {tool})))
+    tmp.write_text(json.dumps({k: sorted(v) for k, v in d.items()}))
     os.chmod(tmp, 0o600)
     tmp.replace(path)
 
 
-def decide(event: dict, tool: str) -> str | None:
-    """"ask", "allow" or None (no decision: Claude Code's own permission flow decides)."""
+def approved(session: str, tool_name: str) -> bool:
+    return tool_name in _load(session)["approved"]
+
+
+def mark_asked(session: str, tool_name: str) -> None:
+    """This hook is about to ask for `tool_name` in this session; PostToolUse turns that into an approval."""
+    d = _load(session)
+    d["pending"].add(tool_name)
+    _save(session, d)
+
+
+def remember(session: str, tool_name: str) -> None:
+    """The call ran. It counts as a session approval only when this hook asked for it (bypassPermissions);
+    a call that ran without the hook asking (another mode, an allow rule) approves nothing."""
+    d = _load(session)
+    if tool_name in d["pending"]:
+        d["pending"].discard(tool_name)
+        d["approved"].add(tool_name)
+        _save(session, d)
+
+
+def decide(event: dict, tool: str, changed: bool) -> str | None:
+    """"ask", "allow" or None (no decision: Claude Code's own permission flow decides). Approvals are kept per
+    full tool name, so each Chat server (gchat-local, a second account...) is approved on its own."""
     if tool in ALWAYS_ASK or ASK == "always":
         return "ask"
-    if ASK == "off" or event.get("permission_mode") != "bypassPermissions":
+    mode = event.get("permission_mode")
+    if ASK == "off":
         return None
-    return "allow" if approved(str(event.get("session_id", "")), tool) else "ask"
+    if mode == "auto":  # auto mode may refuse a rewritten call it judged in its original form: show it instead
+        return "ask" if changed else None
+    if mode != "bypassPermissions":
+        return None
+    return "allow" if approved(str(event.get("session_id", "")), str(event.get("tool_name", ""))) else "ask"
 
 
 def bind_file(tool_input: dict) -> None:
@@ -131,12 +156,12 @@ def reason(tool: str, a: dict) -> str:
 
 event = json.load(sys.stdin)
 tool = str(event.get("tool_name", "")).rsplit("__", 1)[-1]
+session, tool_name = str(event.get("session_id", "")), str(event.get("tool_name", ""))
 if event.get("hook_event_name") == "PostToolUse":
-    if ASK == "session" and tool not in ALWAYS_ASK and event.get("session_id"):
-        remember(str(event["session_id"]), tool)  # the call ran, so the user approved it
+    if ASK == "session" and tool not in ALWAYS_ASK and session:
+        remember(session, tool_name)
     sys.exit(0)
 tool_input = dict(event.get("tool_input") or {})
-decision = decide(event, tool)
 out = {"hookEventName": "PreToolUse"}
 changed = False
 if tool == "send_file" and isinstance(tool_input.get("path"), str):
@@ -154,6 +179,10 @@ if arg and tool_input.get("footer") is not False:
         changed = True
 if changed:
     out["updatedInput"] = tool_input
+decision = decide(event, tool, changed)
+if (decision == "ask" and ASK == "session" and tool not in ALWAYS_ASK and session
+        and event.get("permission_mode") == "bypassPermissions"):
+    mark_asked(session, tool_name)
 if decision:
     shown = {**tool_input, "path": str(event["tool_input"].get("path"))} if tool == "send_file" else tool_input
     why = reason(tool, shown)

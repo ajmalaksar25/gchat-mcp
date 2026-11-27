@@ -550,6 +550,19 @@ def test_hook_asks_once_per_session_in_bypass_mode(tmp_path):
     assert hook(send(), tmp_path)["permissionDecision"] == "allow"
     assert hook(send(session="s2"), tmp_path)["permissionDecision"] == "ask"  # another session asks again
     assert hook(send(tool="react"), tmp_path)["permissionDecision"] == "ask"  # another tool asks again
+    other = {**send(), "tool_name": "mcp__gchat-work__send_message"}
+    assert hook(other, tmp_path)["permissionDecision"] == "ask"  # another Chat server is approved on its own
+
+
+def test_only_calls_the_hook_asked_about_become_approvals(tmp_path):
+    hook(send(mode="auto", event="PostToolUse"), tmp_path)  # ran in auto mode: nobody was asked
+    hook(send(mode="default", event="PostToolUse"), tmp_path)  # ran through Claude Code's own prompt
+    assert hook(send(), tmp_path)["permissionDecision"] == "ask"
+
+
+def test_auto_mode_shows_a_rewritten_call(tmp_path):
+    assert hook(send(mode="auto"), tmp_path) is None
+    assert hook(send(mode="auto"), tmp_path, GCHAT_MCP_HOOK_FOOTER="_f_")["permissionDecision"] == "ask"
 
 
 def test_hook_defers_to_claude_codes_own_prompt_outside_bypass(tmp_path):
