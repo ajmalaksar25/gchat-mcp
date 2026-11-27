@@ -151,9 +151,9 @@ the `inbox_settings` tool and stored in the state file.
   to SubQ. SubQ keeps Decisions inputs for up to 60 days unless your SubQ org has zero data retention. Without a
   key, nothing is sent to SubQ; `GCHAT_TRIAGE_SNAP=off` also forces it off.
 - **PostHog, only if you opt in.** Usage analytics are off unless you set `GCHAT_MCP_POSTHOG_KEY` (see Usage
-  analytics below). When on, each tool call sends its name, duration, success or error, the client and model
-  names, a one-line intent the model writes, and your Google account email, to the PostHog project of that key.
-  Tool arguments and results (message text, names, conversation ids) are removed before sending.
+  analytics below). When on, each tool call sends its name, duration, success or error type, the client and model
+  names, and your Google account email, to the PostHog project of that key. Tool arguments, results and error
+  messages (message text, names, conversation ids) are removed before sending.
 - Nothing else: no telemetry by default, no update checks.
 
 ## Approval (optional client hook)
@@ -185,12 +185,11 @@ Off by default; nothing is sent without a key.
 claude mcp add -s user -e GCHAT_MCP_POSTHOG_KEY=phc_... gchat -- uvx --python 3.13 --from 'google-chat-mcp[analytics]' gchat-mcp
 # from a checkout: uv sync --extra analytics, then run as usual with the variable set
 ```
-- Sent per tool call: `$mcp_tool_call` with the tool name, duration, `$mcp_is_error` and the error type and
-  message, client and model names, and `$mcp_intent` (a short line the calling model writes in an extra `context`
-  argument that the tools get while analytics are on; PostHog redacts emails and phone numbers in it). Events are
-  tied to the signed-in Google account's email. Also `$mcp_initialize` and `$mcp_tools_list`.
-- Never sent: tool arguments (`$mcp_parameters`) and results (`$mcp_response`), so no message text, names or
-  conversation ids. Exception autocapture is off.
+- Sent per tool call: `$mcp_tool_call` with the tool name, duration, `$mcp_is_error` and the error type, and the
+  client and model names. Events are tied to the signed-in Google account's email. Also `$mcp_initialize` and
+  `$mcp_tools_list`. Tools keep their schemas (no `context` argument is added, so there is no `$mcp_intent`).
+- Never sent: tool arguments (`$mcp_parameters`), results (`$mcp_response`) and error messages
+  (`$mcp_error_message`), so no message text, names or conversation ids. Exception autocapture is off.
 - The project key is PostHog's public ingestion key (`phc_...`), not a secret, but it lets anyone send events to
   that project.
 

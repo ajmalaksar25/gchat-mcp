@@ -32,21 +32,27 @@ def test_tool_call_event_has_no_arguments_or_results(monkeypatch):
         """Read a conversation."""
         return "SECRET message text from Dana"
 
+    @srv.tool()
+    def fail() -> str:
+        """Fail like an ownership check."""
+        raise ValueError("SECRET: that message was sent by Dana Lee, not you")
+
     client = analytics.enable(srv)
     assert client is not None
 
     async def go():
         async with create_connected_server_and_client_session(srv) as c:
             tools = (await c.list_tools()).tools
-            await c.call_tool("read_conversation", {"conversation_id": "spaces/SECRETID",
-                                                    "context": "check a reply"})
+            await c.call_tool("read_conversation", {"conversation_id": "spaces/SECRETID"})  # no context: still runs
+            await c.call_tool("fail", {})
             return tools
     tools = anyio.run(go)
     client.flush = lambda: None
     calls = [kw for e, kw in sent if e == "$mcp_tool_call"]
-    assert len(calls) == 1 and calls[0]["distinct_id"] == "sam@example.com"
+    assert len(calls) == 2 and calls[0]["distinct_id"] == "sam@example.com"
+    assert calls[1]["properties"]["$mcp_is_error"] and "$mcp_error_message" not in calls[1]["properties"]
     props = calls[0]["properties"]
     assert props["$mcp_tool_name"] == "read_conversation" and "$mcp_duration_ms" in props
     blob = repr(sent)
     assert "SECRET" not in blob and "$mcp_parameters" not in props and "$mcp_response" not in props
-    assert "context" in tools[0].inputSchema["properties"]  # the intent line the model writes
+    assert all("context" not in t.inputSchema.get("required", []) for t in tools)  # schemas stay as they were

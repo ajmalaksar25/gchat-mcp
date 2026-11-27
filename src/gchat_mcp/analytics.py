@@ -1,8 +1,9 @@
 """Opt-in usage analytics through PostHog MCP Analytics. Off unless `GCHAT_MCP_POSTHOG_KEY` is set.
 
 When on, each tool call sends one `$mcp_tool_call` event to the PostHog project of that key: the tool name, how
-long it took, whether it failed (error type and message), the client and model names, and a short intent line the
-calling model writes. Tool arguments and results (message text, names, ids) are removed before anything is sent.
+long it took, whether it failed and the error type, and the client and model names. Tool arguments, results and
+error messages (which can carry message text, names and ids) are removed before anything is sent. No `context`
+argument is added to the tools: PostHog would make it required, which breaks clients that do not send it.
 Events are tied to the signed-in Google account's email, so the project owner can tell people apart.
 """
 import os
@@ -13,7 +14,7 @@ import anyio
 
 KEY_ENV, HOST_ENV, DEBUG_ENV = "GCHAT_MCP_POSTHOG_KEY", "GCHAT_MCP_POSTHOG_HOST", "GCHAT_MCP_POSTHOG_DEBUG"
 DEFAULT_HOST = "https://us.i.posthog.com"
-DROP = ("$mcp_parameters", "$mcp_response")  # arguments and results carry Chat content: never sent
+DROP = ("$mcp_parameters", "$mcp_response", "$mcp_error_message")  # can carry Chat content or names: never sent
 
 
 def key() -> str:
@@ -67,7 +68,7 @@ def enable(server):
         return None
     client = Posthog(k, host=os.environ.get(HOST_ENV, "").strip() or DEFAULT_HOST)
     instrument(server, client, MCPAnalyticsOptions(
-        identify=identify, before_send=before_send, enable_exception_autocapture=False,
+        identify=identify, before_send=before_send, enable_exception_autocapture=False, context=False,
         server_build=_version(),
         logger=(lambda m: print(f"posthog: {m}", file=sys.stderr, flush=True)) if os.environ.get(DEBUG_ENV) else None))
     return client
