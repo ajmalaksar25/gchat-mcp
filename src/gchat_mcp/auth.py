@@ -22,6 +22,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/chat.messages.reactions",  # react(remove=True) (reactions.delete)
     "https://www.googleapis.com/auth/chat.users.readstate",  # mark_read, mark_unread (read-state updates)
     "https://www.googleapis.com/auth/chat.spaces.create",  # start_conversation (spaces.setup)
+    "https://www.googleapis.com/auth/chat.users.spacesettings",  # notification_settings / set_notifications
     "https://www.googleapis.com/auth/directory.readonly",
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",

@@ -5,7 +5,7 @@ ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
-RUN uv sync --locked --no-dev --extra remote
+RUN uv sync --locked --no-dev --extra remote --extra analytics
 RUN useradd --create-home --uid 10001 app
 USER app
 ENV PATH="/app/.venv/bin:$PATH" PORT=8080

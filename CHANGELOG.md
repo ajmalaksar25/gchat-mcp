@@ -5,15 +5,46 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 ### Added
+- `gchat-mcp watch --chat X --chat Y`: follow several conversations in one watcher and print every new message
+  from others; `--inbox` watches the inbox in the same process, `--include-mine` adds my own messages.
+- Followed conversations keep a cursor in the watch state: a re-armed watcher resumes with no gap and no repeats.
+- `degraded` / `recovered` / `stopped` lines on stdout, so a monitor is not silent through an outage.
+- Every watch line has an `event` field (`inbox`, `message`, `note`, `degraded`, `recovered`, `stopped`).
+- Opt-in PostHog MCP Analytics (`GCHAT_MCP_POSTHOG_KEY`, `analytics` extra): tool name, duration, error type, client
+  and model per call, tied to the signed-in account's email. Arguments, results and error messages are never sent.
+  Off by default.
+- `footer: false` on `send_message`, `send_file` and `edit_message` sends that one message without the footer
+  (server footer and hook footer both skip it).
+- `list_members`: a conversation's members with email, role (manager or member), human or app, and join time.
+- `notification_settings` / `set_notifications`: read and change my own Chat notification level (`all`, `main`,
+  `for_you`, `off`) and mute for one conversation. New scope `chat.users.spacesettings`: run `gchat-mcp login`
+  once after upgrading.
+- `gchat-mcp setup --gcloud [--project ID]`: the gcloud CLI creates the project and turns on the Chat and People
+  APIs (steps 1-2); steps 3-5 open with that project already selected. The interactive wizard offers it when
+  gcloud is signed in. The project id is remembered, so a rerun reuses it. A personal Gmail account or an expired
+  gcloud sign-in stops before any change, with the command to fix it.
+- `setup --guide` links select the remembered project.
+- `setup --for claude-code,claude-desktop,claude-web,codex,cursor,other` (and a menu in the wizard): prints only
+  the setup for the apps you use. `claude-web` explains the hosted (Cloud Run) option; `other` gives the generic
+  command and JSON. The assistant prompt asks where you will use it, with these presets.
+- README: team setup (one shared key file from an Internal project, each person signs in as themselves), and the
+  assistant prompt asks about a shared key file first and uses gcloud when it is there.
 - Remote mode: `gchat-mcp serve` (extra `remote`) serves the tools over Streamable HTTP with OAuth 2.1 (dynamic
   client registration, PKCE, refresh, revocation) and Google sign-in per user, so the server can be added to
   Claude as a custom connector. Stateless: every token is an encrypted blob, no database. Allowlist of users or
   domains, limited redirect URIs, `/healthz`, a `Dockerfile` and Cloud Run steps in `docs/remote.md`.
 
 ### Changed
+- The Claude Code hook asks once per session per write tool instead of before every write, so "don't ask again
+  for this session" works. In bypassPermissions mode it asks the first time and remembers once the call ran
+  (needs the hook on PostToolUse too). `GCHAT_MCP_HOOK_ASK=always|off`; `delete_message` always asks.
 - Tools run in a worker thread, so a slow Google call no longer blocks the event loop.
 - DM and group-chat labels are cached per signed-in user.
 - Needs `mcp>=1.30`.
+
+### Fixed
+- A conversation read that hangs past 2 minutes is abandoned and retried instead of stalling the watcher.
+- A test that depended on today's date (the 3-day default window) now pins the window.
 
 ## [0.3.0] - 2026-11-26
 ### Added

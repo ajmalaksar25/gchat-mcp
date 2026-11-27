@@ -1,6 +1,8 @@
 """Write tools against a fake Chat API: what is called, what is refused before any call, what the read-back says."""
 import hashlib
+import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -482,9 +484,11 @@ def test_installed_hook_binds_the_approval_to_the_bytes_the_server_checks(fake, 
     f = home / "a.txt"
     f.write_text("hello")
     hook = Path(__file__).resolve().parents[1] / "hooks" / "gchat-footer.py"
-    ev = {"tool_name": "mcp__gchat-local__send_file",
+    ev = {"tool_name": "mcp__gchat-local__send_file", "permission_mode": "bypassPermissions", "session_id": "s-file",
           "tool_input": {"path": str(f), "conversation_id": "AAA", "expect_sha256": "caller-supplied-nonsense"}}
-    out = json.loads(subprocess.run([sys.executable, str(hook)], input=json.dumps(ev), capture_output=True, text=True, check=True).stdout)
+    env = {**os.environ, "XDG_CACHE_HOME": str(home / "cache")}
+    out = json.loads(subprocess.run([sys.executable, str(hook)], input=json.dumps(ev), capture_output=True, text=True,
+                                    check=True, env=env).stdout)
     approved = out["hookSpecificOutput"]["updatedInput"]
     assert approved["expect_sha256"] == hashlib.sha256(b"hello").hexdigest()  # the hook overrides the caller's value
     assert "sha256 2cf24dba5fb0a30e" in out["hookSpecificOutput"]["permissionDecisionReason"]
@@ -513,6 +517,68 @@ def test_reference_hook_footer_is_opt_in_and_not_doubled():
                              text=True, check=True, env=env).stdout
         return json.loads(out)["hookSpecificOutput"]["updatedInput"]["messageText"]
 
-    assert run() == "hello"
+    with pytest.raises(json.JSONDecodeError):
+        run()  # no footer, no decision in default mode: the hook prints nothing
     assert run({"GCHAT_MCP_HOOK_FOOTER": "_hook_"}) == "hello\n\n_hook_"
-    assert run({"GCHAT_MCP_HOOK_FOOTER": "_hook_"}, "hello\n\n_hook_") == "hello\n\n_hook_"
+    with pytest.raises(json.JSONDecodeError):
+        run({"GCHAT_MCP_HOOK_FOOTER": "_hook_"}, "hello\n\n_hook_")  # already there: nothing to change
+
+
+HOOK = Path(__file__).resolve().parents[1] / "hooks" / "gchat-footer.py"
+
+
+def hook(event: dict, tmp_path, **env_extra) -> dict | None:
+    import subprocess
+    import sys
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GCHAT_MCP_HOOK")}
+    env.update(XDG_CACHE_HOME=str(tmp_path / "cache"), **env_extra)
+    out = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(event), capture_output=True, text=True,
+                         check=True, env=env).stdout
+    return json.loads(out)["hookSpecificOutput"] if out.strip() else None
+
+
+def send(mode="bypassPermissions", session="s1", tool="send_message", event="PreToolUse", **inp):
+    return {"hook_event_name": event, "session_id": session, "permission_mode": mode,
+            "tool_name": f"mcp__gchat-local__{tool}", "tool_input": {"conversation_id": "AAA", "messageText": "hi", **inp}}
+
+
+def test_hook_asks_once_per_session_in_bypass_mode(tmp_path):
+    first = hook(send(), tmp_path)
+    assert first["permissionDecision"] == "ask" and "without asking again" in first["permissionDecisionReason"]
+    assert hook(send(), tmp_path)["permissionDecision"] == "ask"  # not run yet (still unanswered or denied)
+    hook(send(event="PostToolUse"), tmp_path)  # it ran: the user approved
+    assert hook(send(), tmp_path)["permissionDecision"] == "allow"
+    assert hook(send(session="s2"), tmp_path)["permissionDecision"] == "ask"  # another session asks again
+    assert hook(send(tool="react"), tmp_path)["permissionDecision"] == "ask"  # another tool asks again
+    other = {**send(), "tool_name": "mcp__gchat-work__send_message"}
+    assert hook(other, tmp_path)["permissionDecision"] == "ask"  # another Chat server is approved on its own
+
+
+def test_only_calls_the_hook_asked_about_become_approvals(tmp_path):
+    hook(send(mode="auto", event="PostToolUse"), tmp_path)  # ran in auto mode: nobody was asked
+    hook(send(mode="default", event="PostToolUse"), tmp_path)  # ran through Claude Code's own prompt
+    assert hook(send(), tmp_path)["permissionDecision"] == "ask"
+
+
+def test_auto_mode_shows_a_rewritten_call(tmp_path):
+    assert hook(send(mode="auto"), tmp_path) is None
+    assert hook(send(mode="auto"), tmp_path, GCHAT_MCP_HOOK_FOOTER="_f_")["permissionDecision"] == "ask"
+
+
+def test_hook_defers_to_claude_codes_own_prompt_outside_bypass(tmp_path):
+    assert hook(send(mode="default"), tmp_path) is None  # so "don't ask again for this session" sticks
+    assert "permissionDecision" not in hook(send(mode="default"), tmp_path, GCHAT_MCP_HOOK_FOOTER="_f_")
+
+
+def test_hook_delete_always_asks_and_always_mode_asks_every_time(tmp_path):
+    hook(send(tool="delete_message", event="PostToolUse"), tmp_path)
+    assert hook(send(tool="delete_message", mode="default"), tmp_path)["permissionDecision"] == "ask"
+    assert hook(send(tool="delete_message"), tmp_path)["permissionDecision"] == "ask"
+    hook(send(event="PostToolUse"), tmp_path, GCHAT_MCP_HOOK_ASK="always")
+    assert hook(send(), tmp_path, GCHAT_MCP_HOOK_ASK="always")["permissionDecision"] == "ask"
+    assert hook(send(), tmp_path, GCHAT_MCP_HOOK_ASK="off") is None
+
+
+def test_hook_skips_its_footer_when_the_call_says_footer_false(tmp_path):
+    out = hook(send(mode="default", footer=False), tmp_path, GCHAT_MCP_HOOK_FOOTER="_f_")
+    assert out is None
