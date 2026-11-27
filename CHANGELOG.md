@@ -6,7 +6,7 @@ and versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 ### Added
 - Opt-in PostHog MCP Analytics (`GCHAT_MCP_POSTHOG_KEY`, `analytics` extra): tool name, duration, error type, client
-  and model per call, tied to the signed-in account's email. Tool arguments and results are never sent.
+  and model per call, tied to the signed-in account's email. Arguments, results and error messages are never sent.
   Off by default.
 
 ## [0.3.0] - 2026-11-26
