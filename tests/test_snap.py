@@ -137,7 +137,7 @@ def run_watch(only=("reply_needed", "unclassified")):
 def test_watch_prints_one_line_per_new_item_and_never_twice_across_restarts(srv):
     first = run_watch()
     assert [x["message_id"] for x in first] == ["spaces/DM2/messages/b2", "spaces/DM1/messages/a2"]
-    assert set(first[0]) == {"category", "classified_by", "sender", "conversation", "conversation_id", "message_id",
+    assert set(first[0]) == {"event", "category", "classified_by", "sender", "conversation", "conversation_id", "message_id",
                              "link", "text", "sent_at_local"}
     assert first[0]["category"] == "unclassified" and first[0]["text"] == "ok"
     assert run_watch() == []  # a restarted watcher shares the state: nothing again
