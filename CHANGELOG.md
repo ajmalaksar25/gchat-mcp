@@ -4,6 +4,14 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+### Changed
+- The Claude Code hook asks once per session per write tool instead of before every write, so "don't ask again
+  for this session" works. In bypassPermissions mode it asks the first time and remembers once the call ran
+  (needs the hook on PostToolUse too). `GCHAT_MCP_HOOK_ASK=always|off`; `delete_message` always asks.
+
+### Added
+- `footer: false` on `send_message`, `send_file` and `edit_message` sends that one message without the footer
+  (server footer and hook footer both skip it).
 
 ## [0.3.0] - 2026-11-26
 ### Added
