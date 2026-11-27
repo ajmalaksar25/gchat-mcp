@@ -255,19 +255,37 @@ def save_footer(text: str) -> str:
 
 
 def cloud(args, interactive: bool) -> int:
-    """Steps 1-2 through gcloud when asked (or offered and accepted). Returns the first guide step still to do."""
-    use = args.gcloud
-    if not use and interactive and gcloud.available():
-        who = gcloud.account()
-        use = bool(who) and ask(f"\ngcloud is signed in as {who}. Use it to create the project and turn on the APIs "
-                                "(steps 1 and 2)?", True)
-    if not use:
+    """Steps 1-2 through gcloud when asked (or offered and accepted). Returns the first guide step still to do.
+
+    Without gcloud, or when gcloud is signed out and it was only offered, setup carries on with all 5 steps in the
+    browser. An explicit --gcloud that cannot run because of the sign-in stops with the command to fix it."""
+    if not args.gcloud and not interactive:
         return 0
-    gcloud.check_account(gcloud.account())
-    gcloud.check_token()
-    project, created = gcloud.ensure_project(args.project or "")
-    print(f"\nStep 1 of {len(GUIDE)}: project {project} {'created' if created else 'in use'} (gcloud).")
-    turned_on = gcloud.enable_apis(project)
+    if not gcloud.available():
+        if args.gcloud:
+            print("\ngcloud is not installed, so all 5 steps are done in the web browser. (Installing the gcloud CLI, "
+                  "https://cloud.google.com/sdk/docs/install, would do steps 1 and 2 for you.)")
+        return 0
+    who = gcloud.account()
+    if not args.gcloud:
+        if not who:
+            print("\nTip: gcloud is installed but not signed in. `gcloud auth login` first would do steps 1 and 2 "
+                  "for you; carrying on in the browser.")
+            return 0
+        if not ask(f"\ngcloud is signed in as {who}. Use it to create the project and turn on the APIs "
+                   "(steps 1 and 2)?", True):
+            return 0
+    try:
+        gcloud.check_account(who)
+        gcloud.check_token()
+        project, created = gcloud.ensure_project(args.project or "")
+        print(f"\nStep 1 of {len(GUIDE)}: project {project} {'created' if created else 'in use'} (gcloud).")
+        turned_on = gcloud.enable_apis(project)
+    except gcloud.Failed as e:
+        if args.gcloud:
+            raise
+        print(f"\ngcloud could not do steps 1 and 2: {e.code}\nCarrying on with all 5 steps in the browser.")
+        return 0
     print(f"Step 2 of {len(GUIDE)}: {', '.join(turned_on) or 'Chat and People APIs'} "
           f"{'turned on' if turned_on else 'already on'} (gcloud).")
     args.project = project
@@ -281,8 +299,9 @@ def get_client(args, interactive: bool, first: int = 0) -> None:
         print(f"\nKey file: already in place ({auth.CLIENT}).")
         return
     elif not interactive:
-        if first:
-            print(f"\nSteps {first + 1}-{len(GUIDE)} have no gcloud command; do them in your web browser:")
+        if first or args.gcloud:
+            print(f"\nSteps {first + 1}-{len(GUIDE)}" + (" have no gcloud command;" if first else ":")
+                  + " do them in your web browser:")
             for i in range(first, len(GUIDE)):
                 show(i, False, args.project or "")
         raise Stop("No key file yet. Do the Google Cloud steps (`gchat-mcp setup --guide`), then run again with "

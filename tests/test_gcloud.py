@@ -118,3 +118,29 @@ def test_setup_gcloud_expired_sign_in_stops_before_any_change(home, fake, capsys
     assert setup.main(["--gcloud", "--non-interactive"]) == 1
     assert "gcloud auth login" in capsys.readouterr().out
     assert not any(c[:2] in (["projects", "create"], ["services", "enable"]) for c in fake.calls)
+
+
+def test_setup_gcloud_without_gcloud_installed_prints_all_5_steps(home, monkeypatch, capsys):
+    monkeypatch.setattr(gcloud, "available", lambda which=None: False)
+    assert setup.main(["--gcloud", "--non-interactive"]) == 1
+    out = capsys.readouterr().out
+    assert "gcloud is not installed" in out and "Step 1 of 5: Create a Google Cloud project" in out
+    assert "Step 5 of 5" in out and "--client-secret" in out
+
+
+def test_setup_gcloud_signed_out_stops_with_the_login_command(home, fake, capsys):
+    fake.account = ""
+    assert setup.main(["--gcloud", "--non-interactive"]) == 1
+    assert "gcloud auth login" in capsys.readouterr().out and len(fake.calls) == 1
+
+
+@pytest.mark.parametrize("account, expired, says", [
+    ("", False, "not signed in"), ("sam@example.com", True, "could not do steps 1 and 2")])
+def test_wizard_falls_back_to_the_browser_when_gcloud_cannot_help(home, fake, monkeypatch, capsys,
+                                                                  account, expired, says):
+    fake.account, fake.expired = account, expired
+    monkeypatch.setattr(setup, "ask", lambda q, d: True)
+    args = setup.parser().parse_args([])
+    assert setup.cloud(args, interactive=True) == 0
+    assert says in capsys.readouterr().out
+    assert not any(c[:2] in (["projects", "create"], ["services", "enable"]) for c in fake.calls)
