@@ -194,3 +194,34 @@ def test_footer_not_saved_under_an_old_sign_in(tmp_path, monkeypatch, capsys):
     argv = ["--non-interactive", "--skip-login", "--client-secret", str(new), "--footer", "_x_"]
     assert setup.main(argv) == 1
     assert "needs a new sign-in" in capsys.readouterr().out
+
+
+def test_configs_for_chosen_apps_only():
+    cmd = ["/opt/bin/uvx", "--python", "3.13", "google-chat-mcp"]
+    which = {"uvx": "/opt/bin/uvx"}.get
+    text = setup.configs(cmd, which, ["claude-desktop", "claude-web"])
+    assert "Claude Desktop: merge into" in text and "needs a hosted copy" in text and setup.REMOTE_DOC in text
+    assert "claude mcp add" not in text and "codex mcp add" not in text
+    assert "/opt/bin/uvx --python 3.13 google-chat-mcp" in setup.configs(cmd, which, ["other"])
+    assert all(label.split()[0] in setup.configs(cmd, which) for label in setup.APPS.values())
+
+
+@pytest.mark.parametrize("text, want", [("all", list(setup.APPS)), ("claude-web, cursor", ["claude-web", "cursor"]),
+                                        ("codex,codex", ["codex"])])
+def test_parse_apps(text, want):
+    assert setup.parse_apps(text) == want
+
+
+def test_parse_apps_rejects_unknown_names(capsys):
+    with pytest.raises(SystemExit):
+        setup.main(["--print-config", "--for", "claud-code"])
+    assert "unknown app claud-code" in capsys.readouterr().err
+
+
+def test_choose_apps_menu(monkeypatch, capsys):
+    answers = iter(["9", "x", "2,3"])
+    monkeypatch.setattr("builtins.input", lambda q: next(answers))
+    assert setup.choose_apps() == ["claude-desktop", "claude-web"]
+    assert capsys.readouterr().out.count("Type numbers from 1") == 2
+    monkeypatch.setattr("builtins.input", lambda q: "")
+    assert setup.choose_apps() == list(setup.APPS)

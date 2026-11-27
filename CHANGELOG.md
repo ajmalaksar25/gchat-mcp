@@ -19,6 +19,16 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - `notification_settings` / `set_notifications`: read and change my own Chat notification level (`all`, `main`,
   `for_you`, `off`) and mute for one conversation. New scope `chat.users.spacesettings`: run `gchat-mcp login`
   once after upgrading.
+- `gchat-mcp setup --gcloud [--project ID]`: the gcloud CLI creates the project and turns on the Chat and People
+  APIs (steps 1-2); steps 3-5 open with that project already selected. The interactive wizard offers it when
+  gcloud is signed in. The project id is remembered, so a rerun reuses it. A personal Gmail account or an expired
+  gcloud sign-in stops before any change, with the command to fix it.
+- `setup --guide` links select the remembered project.
+- `setup --for claude-code,claude-desktop,claude-web,codex,cursor,other` (and a menu in the wizard): prints only
+  the setup for the apps you use. `claude-web` explains the hosted (Cloud Run) option; `other` gives the generic
+  command and JSON. The assistant prompt asks where you will use it, with these presets.
+- README: team setup (one shared key file from an Internal project, each person signs in as themselves), and the
+  assistant prompt asks about a shared key file first and uses gcloud when it is there.
 
 ### Changed
 - The Claude Code hook asks once per session per write tool instead of before every write, so "don't ask again
