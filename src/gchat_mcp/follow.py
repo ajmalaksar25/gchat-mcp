@@ -45,6 +45,8 @@ class Follow:
         self.since = since
         self.include_mine = include_mine
         self.info: dict[str, tuple[dict, str]] = {}
+        self.failing: set[str] = set()  # conversations whose last read failed (reported once per outage)
+        self.read_at: datetime | None = None
 
     def _space(self, name: str) -> tuple[dict, str]:
         if name not in self.info:
@@ -57,46 +59,63 @@ class Follow:
 
     def fetch(self, at: datetime | None = None) -> tuple[dict, list[dict]]:
         """Read the messages after each cursor (no cursor moves yet, so an abandoned fetch loses nothing).
-        Returns ({conversation: messages oldest first}, notes)."""
+        Returns ({conversation: messages oldest first}, notes). A conversation that cannot be read is reported
+        once and skipped while the others go on; only when none can be read does this raise."""
         at = at or now()
         notes: list[dict] = []
         with state.store().transact(chat.me_id()) as st:
             cur = dict(st["follow"])
             for s in self.spaces:
                 c = cur.get(s)
+                looked = st["follow_checked"].get(s) or c  # last successful read; older state has only the cursor
                 if c is None:
                     st["follow"][s] = cur[s] = self._start(at)
-                elif fmt.parse_ts(c) < at - CATCH_UP and not self.since:
+                elif fmt.parse_ts(looked) < at - CATCH_UP and not self.since:
                     st["follow"][s] = cur[s] = fmt.rfc3339(at)
                     notes.append({"event": "note", "conversation_id": s,
-                                  "text": f"last looked {fmt.fmt_time(c)}; older messages were not replayed "
+                                  "text": f"last looked {fmt.fmt_time(looked)}; older messages were not replayed "
                                           "(read_conversation shows them)"})
-        fetched = {}
+        fetched, error = {}, None
         for s in self.spaces:
-            msgs, more = chat.messages(s, since=cur[s], cap=FETCH_CAP)
+            try:
+                msgs, more = chat.messages(s, since=cur[s], cap=FETCH_CAP)
+                if msgs:
+                    self._space(s)  # read the label now: once cursors move, nothing may fail before printing
+            except Exception as e:  # this conversation only; the others are still read
+                error = e
+                if s not in self.failing:
+                    self.failing.add(s)
+                    notes.append({"event": "note", "conversation_id": s,
+                                  "text": f"cannot read this conversation ({type(e).__name__}: {str(e)[:160]}); "
+                                          "still trying, the others are watched"})
+                continue
+            if s in self.failing:
+                self.failing.discard(s)
+                notes.append({"event": "note", "conversation_id": s, "text": "readable again"})
             fetched[s] = sorted(msgs, key=lambda m: fmt.parse_ts(m["createTime"]))
             if more:
                 notes.append({"event": "note", "conversation_id": s,
                               "text": f"more than {FETCH_CAP} new messages; only the newest {FETCH_CAP} are shown"})
+        if error is not None and not fetched:
+            raise error
+        self.read_at = at
         return fetched, notes
 
     def commit(self, fetched: dict) -> list[dict]:
         """Move the cursors past `fetched` in one state transaction and return the messages to report, oldest
         first. A message a concurrent watcher already reported is behind the cursor and is skipped."""
         me, out = chat.me_id(), []
+        looked = fmt.rfc3339(self.read_at or now())
         with state.store().transact(me) as st:
             for s, msgs in fetched.items():
+                st["follow_checked"][s] = looked
                 c = st["follow"].get(s)
                 new = [m for m in msgs if c is None or fmt.parse_ts(m["createTime"]) > fmt.parse_ts(c)]
                 if not new:
                     continue
                 st["follow"][s] = new[-1]["createTime"]
                 out += [(s, m) for m in new if self.include_mine or not targets.sender_is_me(m, me)]
-        lines = []
-        for s, m in out:  # names and labels are looked up after the state lock is released
-            sp, label = self._space(s)
-            lines.append(line(sp, label, m))
-        return lines
+        return [line(*self._space(s), m) for s, m in out]  # labels were read in fetch: no API call can fail here
 
     def step(self, at: datetime | None = None) -> list[dict]:
         fetched, notes = self.fetch(at)

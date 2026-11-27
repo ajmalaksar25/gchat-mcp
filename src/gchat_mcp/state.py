@@ -37,7 +37,7 @@ SPACE_PREFS = ("mute", "important")
 
 
 def empty() -> dict:
-    return {"version": VERSION, "reported": {}, "follow": {},
+    return {"version": VERSION, "reported": {}, "follow": {}, "follow_checked": {},
             "settings": {"quiet_hours": "", "tz": DEFAULT_TZ, "spaces": {}, "footer": ""}}
 
 
@@ -130,6 +130,9 @@ def _normalise(d) -> dict:
     fol = d.get("follow")  # followed conversation -> create time of the last message reported
     if isinstance(fol, dict):
         out["follow"] = {str(k): v for k, v in fol.items() if _stamp_ok(v)}
+    chk = d.get("follow_checked")  # followed conversation -> when it was last read successfully
+    if isinstance(chk, dict):
+        out["follow_checked"] = {str(k): v for k, v in chk.items() if _stamp_ok(v)}
     st = d.get("settings")
     if isinstance(st, dict):
         if isinstance(st.get("tz"), str):

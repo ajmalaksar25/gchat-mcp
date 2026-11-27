@@ -92,3 +92,67 @@ def test_outage_reports_degraded_once_then_recovered(srv, monkeypatch):
     monkeypatch.setattr(watch.anyio, "sleep", nap)
     lines = run(["DM1"], polls=6)
     assert [x["event"] for x in lines] == ["degraded", "message", "recovered"]
+
+
+def test_one_unreadable_chat_does_not_silence_the_others(srv, monkeypatch):
+    from gchat_mcp import chat
+    real = chat.messages
+
+    def flaky(space, **kw):
+        if space == "spaces/DM2":
+            raise chat.ApiError("spaces.messages.list", 403, "no access")
+        return real(space, **kw)
+    monkeypatch.setattr(chat, "messages", flaky)
+    f = follow.Follow(["DM1", "DM2"], START)
+    lines = f.step()
+    assert [(x["event"], x.get("message_id", x.get("conversation_id"))) for x in lines] == [
+        ("note", "spaces/DM2"), ("message", "spaces/DM1/messages/a2")]
+    assert f.step() == []  # the outage is reported once, not on every poll
+    monkeypatch.setattr(chat, "messages", real)
+    assert [(x["event"], x.get("message_id", x.get("text"))) for x in f.step()] == [
+        ("note", "readable again"), ("message", "spaces/DM2/messages/b2")]  # nothing missed while it was down
+
+
+def test_label_failure_never_loses_messages(srv, monkeypatch):
+    from gchat_mcp import chat
+    real = chat.get
+    calls = []
+
+    def get(path, call, params=None):
+        if call == "spaces.get" and not calls:
+            calls.append(1)
+            raise chat.ApiError("spaces.get", 503, "blip")
+        return real(path, call, params)
+    monkeypatch.setattr(chat, "get", get)
+    f = follow.Follow(["DM1"], START)
+    with pytest.raises(chat.ApiError):
+        f.step()  # the label read fails before any cursor moves...
+    assert [x["message_id"] for x in f.step() if x["event"] == "message"] == ["spaces/DM1/messages/a2"]  # retry prints it
+
+
+def test_a_quiet_chat_still_reports_a_new_message_after_six_hours(srv, monkeypatch):
+    from datetime import datetime, timezone
+    t = [datetime(2026, 11, 23, 15, 0, tzinfo=timezone.utc)]
+    monkeypatch.setattr(follow, "now", lambda: t[0])
+    f = follow.Follow(["DM1"], START)
+    f.step()  # reports a2 (11:00) and keeps polling
+    for hour in range(16, 23):  # seven quiet hours of polls
+        t[0] = datetime(2026, 11, 23, hour, 0, tzinfo=timezone.utc)
+        assert f.step() == []
+    put(srv, "DM1", "a9", "2026-11-23T22:30:00Z", "222", "still there?")
+    t[0] = datetime(2026, 11, 23, 23, 0, tzinfo=timezone.utc)
+    assert [x["message_id"] for x in follow.Follow(["DM1"]).step()] == ["spaces/DM1/messages/a9"]  # even re-armed
+
+
+def test_inbox_still_watched_when_every_chat_fails(srv, monkeypatch):
+    from gchat_mcp import chat
+
+    def down(self, at=None):
+        raise chat.ApiError("spaces.messages.list", 403, "no access")
+    monkeypatch.setattr(follow.Follow, "fetch", down)
+
+    async def nap(t):
+        pass
+    monkeypatch.setattr(watch.anyio, "sleep", nap)
+    lines = run(["DM1"], inbox=True)
+    assert [x["event"] for x in lines] == ["inbox", "inbox"]

@@ -56,20 +56,33 @@ async def run(only: set[str], poll: int, since: str = "", min_age: int = 0, poll
 
     while polls is None or n < polls:
         n += 1
-        try:
-            events = []
-            if f:  # the read may be abandoned at the deadline; cursors move only in the commit after it
-                with anyio.fail_after(POLL_DEADLINE):
-                    fetched, events = await _in_thread(f.fetch, abandon=True)
-                events += await _in_thread(lambda: f.commit(fetched))
-                for e in events:
-                    emit(e, out)
-            result = await server.poll(None, w, since, min_age, keep) if inbox else None
+        errors = []
+        try:  # the chats and the inbox fail independently: one that cannot be read never silences the other
+            if f:
+                try:  # the read may be abandoned at the deadline; cursors move only in the commit after it
+                    with anyio.fail_after(POLL_DEADLINE):
+                        fetched, events = await _in_thread(f.fetch, abandon=True)
+                    for e in events + await _in_thread(lambda: f.commit(fetched)):
+                        emit(e, out)
+                except auth.AuthError:
+                    raise
+                except Exception as e:
+                    errors.append(e)
+            if inbox:
+                try:
+                    result = await server.poll(None, w, since, min_age, keep)
+                    for i in result.items if result else []:
+                        print(line(i), file=out, flush=True)
+                except auth.AuthError:
+                    raise
+                except Exception as e:
+                    errors.append(e)
         except auth.AuthError as e:
             print(f"gchat-mcp watch: {e}", file=sys.stderr, flush=True)
             emit({"event": "stopped", "error": str(e)[:300]}, out)
             return 2
-        except Exception as e:  # Chat or network error, or a poll past the deadline: back off and keep watching
+        if errors:  # Chat or network error, or a read past the deadline: back off and keep watching
+            e = errors[0]
             fails += 1
             err = "poll took longer than %d s" % POLL_DEADLINE if isinstance(e, TimeoutError) else \
                 f"{type(e).__name__}: {str(e)[:200]}"
@@ -85,8 +98,6 @@ async def run(only: set[str], poll: int, since: str = "", min_age: int = 0, poll
             emit({"event": "recovered", "down_seconds": round(time.monotonic() - down_since)}, out)
             down_since = None
         fails = 0
-        for i in result.items if result else []:
-            print(line(i), file=out, flush=True)
         if polls is None or n < polls:
             await anyio.sleep(poll)
     return 0
