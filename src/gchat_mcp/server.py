@@ -1451,7 +1451,7 @@ def http_app():
     for name in REMOTE_ONLY_LOCAL:
         mcp.remove_tool(name)
     from . import analytics
-    analytics.enable(mcp)  # opt-in (GCHAT_MCP_POSTHOG_KEY); before the app is built, as PostHog's wiring needs
+    analytics.enable(mcp, deployment="hosted")  # opt-in (GCHAT_MCP_POSTHOG_KEY); before the app is built
     app = mcp.streamable_http_app
     return app if isinstance(app, Starlette) else app()
 

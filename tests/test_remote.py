@@ -252,3 +252,4 @@ def test_http_app_drops_send_file_and_keeps_the_rest():
     out = subprocess.run([sys.executable, "-c", code], env={**ENV, "PATH": "/usr/bin:/bin", "HOME": "/tmp"},
                          capture_output=True, text=True, timeout=60)
     assert out.stdout.strip() == "ok", out.stderr
+
