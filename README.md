@@ -267,24 +267,43 @@ an SDK client whose sampling callback runs a real model). Watch options:
 - (d) hosted push: see below.
 
 ### Push: `gchat-mcp watch`
-A long-running watcher that runs the `inbox_wait` loop and prints one JSON line to stdout (flushed) per new item,
-so a background monitor can wake an agent on each line, with triage already done:
+A long-running watcher that prints one JSON line to stdout (flushed) per new item, so a background monitor can
+wake an agent on each line. It watches two things, alone or together in one process:
+
+- **The inbox** (default): the `inbox_wait` loop, items waiting on me, with triage already done.
+- **Chosen conversations** (`--chat`): every new message from someone else in those conversations, in order.
+  Repeat `--chat` (or comma-separate) to follow several in one watcher; add `--inbox` to watch the inbox too.
 
 ```
-uv run --directory /path/to/gchat-mcp gchat-mcp watch [--only reply_needed,unclassified] [--poll 30] [--since ISO] [--min-age 0]
-{"category": "reply_needed", "classified_by": "snap", "sender": "…", "conversation": "…", "conversation_id": "spaces/…",
- "message_id": "spaces/…/messages/…", "link": "https://chat.google.com/…", "text": "first 160 chars", "sent_at_local": "25 Nov 11:51 AM"}
+uvx google-chat-mcp watch [--only reply_needed,unclassified] [--poll 30] [--since ISO] [--min-age 0]
+uvx google-chat-mcp watch --chat spaces/AAAA --chat https://chat.google.com/room/BBBB [--inbox] [--include-mine]
+
+{"event": "inbox", "category": "reply_needed", "classified_by": "snap", "sender": "…", "conversation": "…",
+ "conversation_id": "spaces/…", "message_id": "spaces/…/messages/…", "link": "https://chat.google.com/…",
+ "text": "first 160 chars", "sent_at_local": "25 Nov 11:51 AM"}
+{"event": "message", "conversation": "…", "conversation_id": "spaces/…", "sender": "…", "message_id": "…",
+ "thread_id": "…", "reply": false, "link": "…", "text": "first 400 chars", "sent_at_local": "27 Nov 11:02 AM"}
 ```
-- `--only`: kinds to print, from `reply_needed`, `worth_a_look`, `no_reply_needed`, `unclassified` (default
-  `reply_needed,unclassified`). Items of other kinds that the server classified are recorded quietly; unclassified
-  ones not printed stay for an MCP client.
-- It shares the per-user watch state with the MCP tools: a trigger is reported once across the watcher, restarts
-  of it, `inbox_triage(only_new=true)` and `inbox_wait`. Quiet hours, mute and important apply.
-- Chat or network errors: a line on stderr, then back off (`poll × 2ⁿ`, at most 15 min). A missing or expired
-  sign-in exits with code 2. SIGTERM or Ctrl-C exits cleanly with code 0. Read-only on Chat.
-- Under a background monitor (in Claude Code, the Monitor tool or a `run_in_background` Bash command that the
-  agent waits on): start the command above, and treat each stdout line as one event; stop it with SIGTERM.
-  Without sampling in the client, Snap is what makes the line arrive already classified.
+- `--chat` takes `spaces/X`, the bare id, or a Google Chat link (`chat.google.com/dm/…`, `/room/…`, Gmail's
+  `#chat/space/…`). `find_conversations` gives the id from a name.
+- **Restarts lose nothing.** Each followed conversation keeps a cursor (the time of the last message reported) in
+  the per-user watch state, so a watcher started again, for example a background monitor that expired and was
+  re-armed, prints what arrived in between and nothing twice, even with two watchers on the same conversation.
+  On the first run the cursor starts now (or at `--since`); a cursor more than 6 hours old restarts at now with a
+  `note` line instead of replaying the backlog. The inbox side shares its cursor with `inbox_triage(only_new=true)`
+  and `inbox_wait`; quiet hours, mute and important apply to it.
+- `--only` (inbox): kinds to print, from `reply_needed`, `worth_a_look`, `no_reply_needed`, `unclassified`
+  (default `reply_needed,unclassified`). Items of other kinds that the server classified are recorded quietly.
+- **Errors:** a Chat or network error writes a line on stderr and retries in 5, 10, 15 … seconds (at most 30). A
+  conversation read that takes over 2 minutes is abandoned and retried. After 3 failed polls in a row one
+  `{"event": "degraded"}` line goes to stdout, and one `{"event": "recovered"}` when it works again, so a monitor
+  is never silent through an outage. A missing or expired sign-in prints `{"event": "stopped"}` and exits with
+  code 2. SIGTERM or Ctrl-C exits cleanly with code 0. Read-only on Chat.
+- **Under a background monitor** (Claude Code's Monitor tool, or a `run_in_background` command the agent waits
+  on): run one watcher for everything you follow, treat each stdout line as an event, and stop it with SIGTERM.
+  Claude Code's Monitor ends a watch after at most 30 minutes; re-arm it with the same command, and the cursor
+  makes the new one pick up exactly where the old one stopped. Without sampling in the client, Snap is what makes
+  inbox lines arrive already classified.
 
 ### Surfacing it in T3 Code (no custom build)
 A scheduled task whose prompt is one line, e.g. every 30 minutes on weekdays:
