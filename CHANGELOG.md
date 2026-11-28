@@ -38,6 +38,9 @@ and versions follow [Semantic Versioning](https://semver.org/).
   client registration, PKCE, refresh, revocation) and Google sign-in per user, so the server can be added to
   Claude as a custom connector. Stateless: every token is an encrypted blob, no database. Allowlist of users or
   domains, limited redirect URIs, `/healthz`, a `Dockerfile` and Cloud Run steps in `docs/remote.md`.
+  Codes are single use and refresh tokens rotate; with `GCHAT_MCP_FIRESTORE_PROJECT` those checks hold across
+  instances (one Firestore document per claim, failing closed). In remote mode `get_attachment` returns PDFs and
+  other files up to about 3.5 MB as embedded resources.
 
 ### Changed
 - The Claude Code hook asks once per session per write tool instead of before every write, so "don't ask again

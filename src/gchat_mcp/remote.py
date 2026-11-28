@@ -16,6 +16,8 @@ Configuration (environment):
   GCHAT_MCP_SECRET                at least 32 random characters; comma-separate several to rotate (first encrypts)
   GCHAT_MCP_ALLOWED_USERS         who may sign in: emails and/or @domains, comma-separated (required)
   GCHAT_MCP_REDIRECT_URIS         extra exact client redirect URIs to accept (Claude's and loopback are built in)
+  GCHAT_MCP_FIRESTORE_PROJECT     share single-use claims (codes, rotated refresh tokens) across instances;
+                                  unset: kept in process, so run one instance
 """
 import base64
 import hashlib
@@ -169,19 +171,74 @@ def _id_claims(id_token: str, client_id: str) -> dict:
     return claims
 
 
+class MemoryGuard:
+    """Single-use claims kept in this process: enough for one instance (Cloud Run `--max-instances 1`)."""
+
+    def __init__(self):
+        self._seen: dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def claim(self, kind: str, token: str, expires_at: float) -> bool:
+        """True the first time `token` of this kind is used; False ever after (until it would have expired)."""
+        key = f"{kind}-{hashlib.sha256(token.encode()).hexdigest()}"
+        with self._lock:
+            now = time.time()
+            for k in [k for k, exp in self._seen.items() if exp < now]:
+                del self._seen[k]
+            if key in self._seen:
+                return False
+            self._seen[key] = expires_at
+            return True
+
+
+class FirestoreGuard:
+    """Single-use claims shared by every instance: one Firestore document per used code or refresh token, made
+    with createDocument, which Firestore refuses (409) when the document exists. So a code or a replaced refresh
+    token is refused on every replica. Uses the service's own Google credentials (Cloud Run's service account,
+    role Cloud Datastore User); no extra package. Fails closed: if Firestore cannot answer, the token is refused.
+    A TTL policy on `expireAt` (collection group `gchat_mcp_spent`) lets Firestore delete old claims."""
+
+    COLLECTION = "gchat_mcp_spent"
+
+    def __init__(self, project: str, database: str = "(default)", session=None):
+        if session is None:
+            import google.auth
+            from google.auth.transport.requests import AuthorizedSession
+            creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/datastore"])
+            session = AuthorizedSession(creds)
+        self.session = session
+        self.url = (f"https://firestore.googleapis.com/v1/projects/{project}/databases/{database}"
+                    f"/documents/{self.COLLECTION}")
+
+    def claim(self, kind: str, token: str, expires_at: float) -> bool:
+        from datetime import datetime, timezone
+        doc = f"{kind}-{hashlib.sha256(token.encode()).hexdigest()}"
+        when = datetime.fromtimestamp(expires_at, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            r = self.session.post(self.url, params={"documentId": doc}, timeout=10,
+                                  json={"fields": {"expireAt": {"timestampValue": when}}})
+        except requests.RequestException:
+            return False
+        return r.status_code == 200  # 409 ALREADY_EXISTS: used before; anything else: refuse (fail closed)
+
+
 class GoogleProxyProvider:
     """OAuthAuthorizationServerProvider that keeps no state: everything it issues is a sealed `Box` payload."""
 
-    def __init__(self, cfg: Config, http=requests):
+    def __init__(self, cfg: Config, http=requests, guard=None):
         self.cfg, self.box, self.http = cfg, Box(cfg.secrets), http
-        self._used: dict[str, float] = {}  # code hash -> expiry: single use within this instance
-        self._spent: dict[str, float] = {}  # replaced refresh token hash -> expiry (rotation, per instance)
-        self._lock = threading.Lock()
+        # codes are single use and a refresh token stops working once it is exchanged (rotation)
+        self.guard = guard or MemoryGuard()
+
+    async def _claim(self, kind: str, token: str, expires_at: float) -> bool:
+        return await anyio.to_thread.run_sync(self.guard.claim, kind, token, expires_at)
 
     # --- clients (RFC 7591): the client id is the sealed registration
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         d = self.box.open("client", client_id)
-        if not d:
+        # A record that no key in GCHAT_MCP_SECRET opens (e.g. sealed with a dropped key) is unknown: the token
+        # endpoint answers 401 and the connector registers again. Redirects are re-checked on every load.
+        if not d or not all(self.cfg.redirect_allowed(u) for u in d["r"]):
             return None
         secret = self.box.client_secret(client_id) if d["m"] != "none" else None
         return OAuthClientInformationFull(client_id=client_id, client_secret=secret, redirect_uris=d["r"],
@@ -270,14 +327,8 @@ class GoogleProxyProvider:
         d = self.box.open("code", authorization_code)
         if not d or d["cid"] != _cid(client.client_id):
             return None
-        h = hashlib.sha256(authorization_code.encode()).hexdigest()
-        with self._lock:
-            now = time.time()
-            for k in [k for k, exp in self._used.items() if exp < now]:
-                del self._used[k]
-            if h in self._used:
-                return None
-            self._used[h] = d["exp"]
+        if not await self._claim("code", authorization_code, d["exp"]):
+            return None
         return Code(code=authorization_code, scopes=d["sc"], expires_at=d["exp"], client_id=client.client_id,
                     code_challenge=d["cc"], redirect_uri=d["ru"], redirect_uri_provided_explicitly=d["rux"],
                     resource=d["res"], subject=d["g"]["sub"], google=d["g"])
@@ -298,22 +349,16 @@ class GoogleProxyProvider:
 
     async def load_refresh_token(self, client: OAuthClientInformationFull, refresh_token: str):
         d = self.box.open("refresh", refresh_token)
-        if not d or d["cid"] != _cid(client.client_id) or self._is_spent(refresh_token):
+        if not d or d["cid"] != _cid(client.client_id):
+            return None
+        # Rotation: the first exchange claims this refresh token; any later use (a copy) is refused.
+        if not await self._claim("refresh", refresh_token, d["exp"]):
             return None
         return Refresh(token=refresh_token, client_id=client.client_id, scopes=d["sc"], expires_at=int(d["exp"]),
                        resource=d["res"], subject=d["g"]["sub"], google=d["g"])
 
-    def _is_spent(self, token: str) -> bool:
-        with self._lock:
-            now = time.time()
-            for k in [k for k, exp in self._spent.items() if exp < now]:
-                del self._spent[k]
-            return hashlib.sha256(token.encode()).hexdigest() in self._spent
-
     async def exchange_refresh_token(self, client: OAuthClientInformationFull, refresh_token: Refresh,
                                      scopes: list[str]) -> OAuthToken:
-        with self._lock:  # rotation: the refresh token just used is refused from now on (on this instance)
-            self._spent[hashlib.sha256(refresh_token.token.encode()).hexdigest()] = float(refresh_token.expires_at or 0)
         g = dict(refresh_token.google)
         if not self.cfg.user_allowed(g.get("email", "")):
             raise TokenError("invalid_grant", "this account may no longer use this server")
@@ -331,8 +376,8 @@ class GoogleProxyProvider:
             return None
         if d["res"] and d["res"].rstrip("/") not in (self.cfg.base_url, self.cfg.base_url + "/mcp"):
             return None  # issued for another resource
-        return Access(token=token, client_id=d.get("ci") or d["cid"], scopes=d["sc"], expires_at=int(d["exp"]), resource=d["res"],
-                      subject=d["g"]["sub"], google=d["g"])
+        return Access(token=token, client_id=d.get("ci") or d["cid"], scopes=d["sc"], expires_at=int(d["exp"]),
+                      resource=d["res"], subject=d["g"]["sub"], google=d["g"])
 
     async def revoke_token(self, token) -> None:
         rt = getattr(token, "google", {}).get("rt")
@@ -365,9 +410,17 @@ def _request_credentials(cfg: Config):
     return source
 
 
-def configure(mcp, cfg: Config, http=requests) -> GoogleProxyProvider:
+def guard_from_env(env=os.environ):
+    """FirestoreGuard when GCHAT_MCP_FIRESTORE_PROJECT is set (several instances), else MemoryGuard (one instance)."""
+    project = env.get("GCHAT_MCP_FIRESTORE_PROJECT", "").strip()
+    if not project:
+        return MemoryGuard()
+    return FirestoreGuard(project, env.get("GCHAT_MCP_FIRESTORE_DATABASE", "").strip() or "(default)")
+
+
+def configure(mcp, cfg: Config, http=requests, guard=None) -> GoogleProxyProvider:
     """Turn the stdio FastMCP instance into an authenticated Streamable HTTP server."""
-    provider = GoogleProxyProvider(cfg, http)
+    provider = GoogleProxyProvider(cfg, http, guard if guard is not None else guard_from_env())
     mcp.settings.auth = AuthSettings(
         issuer_url=AnyHttpUrl(cfg.base_url), resource_server_url=AnyHttpUrl(cfg.base_url + "/mcp"),
         validate_token_resource=False,  # load_access_token checks the resource itself (it may be absent)

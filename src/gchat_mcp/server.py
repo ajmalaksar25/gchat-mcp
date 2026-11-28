@@ -21,8 +21,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import anyio
 from mcp.server.fastmcp import Context, FastMCP
-from mcp.types import (CallToolResult, ClientCapabilities, ImageContent, ModelHint, ModelPreferences,
-                       SamplingCapability, SamplingMessage, TextContent)
+from mcp.types import (BlobResourceContents, CallToolResult, ClientCapabilities, EmbeddedResource, ImageContent,
+                       ModelHint, ModelPreferences, SamplingCapability, SamplingMessage, TextContent)
 
 from . import auth, chat, fmt, mentions, readstate, safefile, snap, state, targets, triage
 from . import footer as footer_mod
@@ -374,6 +374,8 @@ def get_attachment(message_id: str, index: int = 0, quoted: bool = False) -> Cal
     message_id: full `spaces/X/messages/Y`. index: position among that message's attachments.
     quoted: the attachment belongs to the quoted or forwarded message shown under it.
     Images come back inline, text files as text; every file is also saved locally and the path given.
+    In remote mode nothing is saved: other files (PDFs and the like) up to about 3.5 MB come back as an embedded
+    resource with their bytes; larger ones are named only and must be opened in Google Chat.
     Drive files are not downloaded here: the result gives the Drive file id for the Google Drive connector.
     """
     m = chat.get(_sid(message_id), "messages.get")
@@ -404,8 +406,13 @@ def get_attachment(message_id: str, index: int = 0, quoted: bool = False) -> Cal
     elif ctype.startswith(TEXT_TYPES):
         text = data.decode("utf-8", errors="replace")
         content.append(TextContent(type="text", text=text[:OUT_CAP] + ("\n…(truncated)" if len(text) > OUT_CAP else "")))
+    elif REMOTE and len(data) <= INLINE_IMAGE_CAP:  # no disk to point at: hand over the bytes themselves
+        content.append(EmbeddedResource(type="resource", resource=BlobResourceContents(
+            uri=f"gchat://attachment/{_sid(message_id)}/{int(quoted)}/{index}", mimeType=ctype or "application/octet-stream",
+            blob=base64.b64encode(data).decode())))
     elif REMOTE:
-        content.append(TextContent(type="text", text="Not shown inline: this file type can only be opened in Google Chat."))
+        content.append(TextContent(type="text", text=(
+            f"Too large to return here (limit {INLINE_IMAGE_CAP / 1e6:.1f} MB): open it in Google Chat.")))
     else:
         content.append(TextContent(type="text", text="Not shown inline: read the saved file (images and PDFs are readable)."))
     return CallToolResult(content=content)

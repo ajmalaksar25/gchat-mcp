@@ -60,9 +60,8 @@ class FakeGoogle:
         return FakeResp(200, {"access_token": f"gat-refreshed-{self.n}", "expires_in": 3599})
 
 
-@pytest.fixture
-def server(monkeypatch):
-    g = FakeGoogle()
+def _app(g, guard=None):
+    """One server instance (a replica) on its own FastMCP; replicas share only the secret and the guard."""
     mcp = FastMCP("t")
 
     @mcp.tool()
@@ -70,12 +69,44 @@ def server(monkeypatch):
         """Returns the Google access token this request would use (checks the context reaches threads)."""
         return await anyio.to_thread.run_sync(lambda: auth.credentials().token)
 
-    remote.configure(mcp, remote.Config.from_env(ENV), http=g)
-    remote._creds.clear()
+    remote.configure(mcp, remote.Config.from_env(ENV), http=g, guard=guard)
     app = mcp.streamable_http_app
-    client = TestClient(app if isinstance(app, Starlette) else app(), base_url=BASE, follow_redirects=False)
-    with client:
+    return TestClient(app if isinstance(app, Starlette) else app(), base_url=BASE, follow_redirects=False)
+
+
+@pytest.fixture
+def server(monkeypatch):
+    g = FakeGoogle()
+    remote._creds.clear()
+    with _app(g) as client:
         yield client, g
+    auth.set_remote_source(None, "run `gchat-mcp login`")
+
+
+class FakeFirestore:
+    """createDocument: 200 the first time a document id is used, 409 ALREADY_EXISTS after that."""
+
+    def __init__(self):
+        self.docs, self.down = {}, False
+
+    def post(self, url, params, json, timeout):
+        assert url.endswith("/documents/gchat_mcp_spent") and "expireAt" in json["fields"]
+        if self.down:
+            return FakeResp(503, {})
+        if params["documentId"] in self.docs:
+            return FakeResp(409, {"error": {"status": "ALREADY_EXISTS"}})
+        self.docs[params["documentId"]] = json
+        return FakeResp(200, {})
+
+
+@pytest.fixture
+def replicas():
+    """Two instances behind one URL, sharing a Firestore guard, as on Cloud Run with several instances."""
+    g, fs = FakeGoogle(), FakeFirestore()
+    guard = remote.FirestoreGuard("proj", session=fs)
+    remote._creds.clear()
+    with _app(g, guard) as a, _app(g, guard) as b:
+        yield a, b, g, fs
     auth.set_remote_source(None, "run `gchat-mcp login`")
 
 
@@ -253,3 +284,66 @@ def test_http_app_drops_send_file_and_keeps_the_rest():
                          capture_output=True, text=True, timeout=60)
     assert out.stdout.strip() == "ok", out.stderr
 
+
+
+def test_a_code_used_on_one_replica_is_refused_on_another(replicas):
+    a, b, g, fs = replicas
+    cid, q, v = _sign_in(a, g)
+    assert _token(a, cid, q["code"][0], v).status_code == 200
+    assert _token(b, cid, q["code"][0], v).status_code == 400
+    assert any(k.startswith("code-") for k in fs.docs) and not any(q["code"][0] in k for k in fs.docs)
+
+
+def test_a_replaced_refresh_token_is_refused_on_every_replica(replicas):
+    a, b, g, _ = replicas
+    cid, q, v = _sign_in(a, g)
+    t = _token(a, cid, q["code"][0], v).json()
+    form = {"grant_type": "refresh_token", "refresh_token": t["refresh_token"], "client_id": cid}
+    new = a.post("/token", data=form)
+    assert new.status_code == 200
+    assert b.post("/token", data=form).status_code == 400  # the old one, on the other replica
+    form["refresh_token"] = new.json()["refresh_token"]
+    assert b.post("/token", data=form).status_code == 200  # the new one works anywhere
+
+
+def test_firestore_unreachable_refuses_rather_than_allowing_reuse(replicas):
+    a, _, g, fs = replicas
+    cid, q, v = _sign_in(a, g)
+    fs.down = True
+    assert _token(a, cid, q["code"][0], v).status_code == 400
+
+
+def test_a_client_sealed_with_a_dropped_key_must_register_again(server):
+    c, g = server
+    cid, _, _ = _sign_in(c, g)
+    other = remote.Box(("z" * 40,))
+    r = c.post("/token", data={"grant_type": "refresh_token", "refresh_token": "x", "client_id": other.seal(
+        "client", {"r": [CLAUDE_CB], "m": "none"})})
+    assert r.status_code == 401  # unknown client: the connector registers again
+    forged = remote.Box((ENV["GCHAT_MCP_SECRET"],)).seal("client", {"r": ["https://evil.example/cb"], "m": "none"})
+    r = c.get("/authorize", params={"response_type": "code", "client_id": forged, "redirect_uri": "https://evil.example/cb",
+                                    "code_challenge": "x" * 43, "code_challenge_method": "S256"})
+    assert r.status_code == 400 and "evil" not in r.headers.get("location", "")
+
+
+def test_guard_from_env_picks_memory_unless_a_firestore_project_is_set(monkeypatch):
+    assert isinstance(remote.guard_from_env({}), remote.MemoryGuard)
+    made = {}
+    monkeypatch.setattr(remote.FirestoreGuard, "__init__", lambda self, p, d: made.update(p=p, d=d))
+    assert isinstance(remote.guard_from_env({"GCHAT_MCP_FIRESTORE_PROJECT": "proj"}), remote.FirestoreGuard)
+    assert made == {"p": "proj", "d": "(default)"}
+
+
+def test_remote_get_attachment_returns_a_pdf_as_an_embedded_resource(monkeypatch):
+    from gchat_mcp import chat, server
+    pdf = b"%PDF-1.7 tiny"
+    monkeypatch.setattr(server, "REMOTE", True)
+    monkeypatch.setattr(chat, "get", lambda *a, **k: {"attachment": [
+        {"contentName": "q3.pdf", "contentType": "application/pdf", "attachmentDataRef": {"resourceName": "r1"}}]})
+    monkeypatch.setattr(chat, "download", lambda resource, cap: pdf)
+    res = server.get_attachment("spaces/AAA/messages/m1")
+    blob = res.content[1].resource
+    assert base64.b64decode(blob.blob) == pdf and blob.mimeType == "application/pdf"
+    assert "saved to" not in res.content[0].text
+    monkeypatch.setattr(chat, "download", lambda resource, cap: b"x" * (server.INLINE_IMAGE_CAP + 1))
+    assert "open it in Google Chat" in server.get_attachment("spaces/AAA/messages/m1").content[1].text
